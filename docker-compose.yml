@@ -1,0 +1,15 @@
+services:
+  homechat:
+    build: .
+    container_name: homechat
+    restart: unless-stopped
+    environment:
+      TZ: America/Vancouver
+      DATA_DIR: /app/data
+      UPLOAD_DIR: /app/data/uploads
+      MAX_UPLOAD_BYTES: 104857600
+      SESSION_DAYS: 30
+    volumes:
+      - /home/dkeeton/docker/appdata/homechat:/app/data
+    ports:
+      - "8092:3000"
