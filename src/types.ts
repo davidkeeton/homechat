@@ -111,5 +111,9 @@ export interface ContactRequestsView {
 }
 
 export interface DirectoryUser extends PublicUser {
-  relationship: 'self' | 'contact' | 'incoming' | 'outgoing' | 'none';
+  relationship: 'self' | 'contact' | 'incoming' | 'outgoing' | 'blocked' | 'none';
+}
+
+export interface MessageSearchResult {
+  message: MessageView;
 }

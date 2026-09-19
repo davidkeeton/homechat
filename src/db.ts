@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
 import { hashPassword, hashToken, newSessionToken } from './security.js';
-import type { ContactRequestsView, ConversationInventory, ConversationSummary, DirectoryUser, LinkPreview, MessageView, PublicUser, ReplyPreview } from './types.js';
+import type { ContactRequestsView, ConversationInventory, ConversationSummary, DirectoryUser, LinkPreview, MessageSearchResult, MessageView, PublicUser, ReplyPreview } from './types.js';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 fs.mkdirSync(config.uploadDir, { recursive: true });
@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS contacts (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(user_id, contact_id)
 );
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(blocker_id, blocked_id)
+);
 CREATE TABLE IF NOT EXISTS contact_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -115,6 +121,7 @@ if (!messageColumnsV08.some(c => String(c.name) === 'reply_to_id')) db.exec('ALT
 if (!messageColumnsV08.some(c => String(c.name) === 'deleted_at')) db.exec('ALTER TABLE messages ADD COLUMN deleted_at TEXT');
 db.exec('CREATE INDEX IF NOT EXISTS idx_contact_requests_recipient ON contact_requests(recipient_id);');
 db.exec('CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);');
+db.exec('CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);');
 
 // v0.4 migration: existing v0.1-v0.3 databases do not have HIDs.
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
@@ -458,6 +465,47 @@ export function saveLinkPreview(preview:LinkPreview): void {
 }
 
 
+export function searchMessages(userId:number,q:string,limit=50): MessageSearchResult[] {
+  const term=q.trim(); if(!term) return [];
+  const rows=db.prepare(`
+    SELECT m.id FROM messages m
+    JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=?
+    WHERE m.deleted_at IS NULL AND m.body IS NOT NULL AND m.body LIKE ? COLLATE NOCASE
+    ORDER BY m.id DESC LIMIT ?
+  `).all(userId,`%${term}%`,Math.min(100,Math.max(1,limit))) as any[];
+  return rows.map(r=>messageById(Number(r.id))).filter(Boolean).map(message=>({message:message!}));
+}
+
+export function isBlockedPair(a:number,b:number): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)').get(a,b,b,a));
+}
+
+export function listBlocked(userId:number): PublicUser[] {
+  return (db.prepare('SELECT u.* FROM blocks b JOIN users u ON u.id=b.blocked_id WHERE b.blocker_id=? AND u.disabled=0 ORDER BY u.display_name COLLATE NOCASE').all(userId) as any[]).map(publicUser);
+}
+
+export function blockUser(blockerId:number,blockedId:number): void {
+  if(blockerId===blockedId||!getUserById(blockedId)) throw new Error('invalid_user');
+  db.exec('BEGIN');
+  try{
+    db.prepare('INSERT OR IGNORE INTO blocks(blocker_id,blocked_id) VALUES(?,?)').run(blockerId,blockedId);
+    db.prepare('DELETE FROM contacts WHERE (user_id=? AND contact_id=?) OR (user_id=? AND contact_id=?)').run(blockerId,blockedId,blockedId,blockerId);
+    db.prepare('DELETE FROM contact_requests WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)').run(blockerId,blockedId,blockedId,blockerId);
+    db.exec('COMMIT');
+  }catch(e){db.exec('ROLLBACK');throw e;}
+}
+
+export function unblockUser(blockerId:number,blockedId:number): void {
+  db.prepare('DELETE FROM blocks WHERE blocker_id=? AND blocked_id=?').run(blockerId,blockedId);
+}
+
+export function directConversationBlocked(conversationId:number,userId:number): boolean {
+  const row=db.prepare("SELECT type FROM conversations WHERE id=?").get(conversationId) as any;
+  if(!row||String(row.type)!=='direct') return false;
+  const others=conversationMemberIds(conversationId).filter(id=>id!==userId);
+  return others.some(id=>isBlockedPair(userId,id));
+}
+
 export function listContacts(userId:number): PublicUser[] {
   return (db.prepare(`SELECT u.* FROM contacts c JOIN users u ON u.id=c.contact_id WHERE c.user_id=? AND u.disabled=0 ORDER BY u.display_name COLLATE NOCASE`).all(userId) as any[]).map(publicUser);
 }
@@ -480,6 +528,7 @@ export function searchDirectory(userId:number,q:string): DirectoryUser[] {
   return rows.map(row=>{
     const u=publicUser(row); let relationship:DirectoryUser['relationship']='none';
     if(u.id===userId) relationship='self';
+    else if(db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(userId,u.id)) relationship='blocked';
     else if(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(userId,u.id)) relationship='contact';
     else if(db.prepare('SELECT 1 FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(userId,u.id)) relationship='outgoing';
     else if(db.prepare('SELECT 1 FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(u.id,userId)) relationship='incoming';
@@ -490,6 +539,7 @@ export function searchDirectory(userId:number,q:string): DirectoryUser[] {
 export function sendContactRequest(senderId:number,recipientId:number): void {
   if(senderId===recipientId) throw new Error('invalid_user');
   if(!getUserById(recipientId)) throw new Error('invalid_user');
+  if(isBlockedPair(senderId,recipientId)) throw new Error('blocked');
   if(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(senderId,recipientId)) throw new Error('already_contact');
   const reverse=db.prepare('SELECT id FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(recipientId,senderId) as any;
   if(reverse){acceptContactRequest(Number(reverse.id),senderId);return;}

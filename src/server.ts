@@ -11,9 +11,9 @@ import { config } from './config.js';
 import { requireAuth } from './auth.js';
 import { randomStoredName, verifyPassword } from './security.js';
 import {
-  acceptContactRequest, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
-  findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getUserById, getUserForLogin, history,
-  deleteMessage, declineContactRequest, editMessage, insertFile, isMember, listContacts, listUsers, markReceipt, messageById, removeContact, revokeToken, saveLinkPreview, searchDirectory, sendContactRequest, setUserAvatar, toggleReaction, userCount,
+  acceptContactRequest, blockUser, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
+  directConversationBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getUserById, getUserForLogin, history,
+  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setUserAvatar, toggleReaction, unblockUser, userCount,
   userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser
 } from './db.js';
 import type { LinkPreview } from './types.js';
@@ -22,7 +22,7 @@ const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.8.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.9.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -55,6 +55,7 @@ app.post('/api/users',requireAuth,(req,res)=>{
 app.get('/api/contacts',requireAuth,(req,res)=>res.json(listContacts(req.user!.id)));
 app.get('/api/contact-requests',requireAuth,(req,res)=>res.json(contactRequests(req.user!.id)));
 app.get('/api/directory',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.id,String(req.query.q??''))));
+app.get('/api/search/messages',requireAuth,(req,res)=>res.json(searchMessages(req.user!.id,String(req.query.q??''),Number(req.query.limit??50))));
 app.post('/api/contact-requests',requireAuth,(req,res)=>{
   const uid=Number(req.body?.userId); if(!uid) return res.status(400).json({error:'invalid_user'});
   try{sendContactRequest(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
@@ -64,6 +65,9 @@ app.post('/api/contact-requests/:id/accept',requireAuth,(req,res)=>{
 });
 app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{declineContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();});
 app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{removeContact(req.user!.id,Number(req.params.userId));res.status(204).end();});
+app.get('/api/blocks',requireAuth,(req,res)=>res.json(listBlocked(req.user!.id)));
+app.post('/api/blocks',requireAuth,(req,res)=>{const uid=Number(req.body?.userId);try{blockUser(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'block_failed'});}});
+app.delete('/api/blocks/:userId',requireAuth,(req,res)=>{unblockUser(req.user!.id,Number(req.params.userId));res.status(204).end();});
 
 app.get('/api/conversations',requireAuth,(req,res)=>{
   findOrCreateSelf(req.user!.id);
@@ -72,6 +76,7 @@ app.get('/api/conversations',requireAuth,(req,res)=>{
 app.post('/api/conversations/self',requireAuth,(req,res)=>res.status(201).json({id:findOrCreateSelf(req.user!.id)}));
 app.post('/api/conversations/direct',requireAuth,(req,res)=>{
   const otherId=Number(req.body?.userId); if (!getUserById(otherId) || otherId===req.user!.id) return res.status(400).json({error:'invalid_user'});
+  if(isBlockedPair(req.user!.id,otherId)) return res.status(403).json({error:'blocked'});
   const id=findOrCreateDirect(req.user!.id,otherId); res.status(201).json({id});
 });
 app.post('/api/conversations/group',requireAuth,(req,res)=>{
@@ -233,6 +238,7 @@ io.on('connection',(socket)=>{
   socket.on('message:send',(payload,ack)=>{
     const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null; const clientNonce=typeof payload?.clientNonce==='string'?payload.clientNonce.slice(0,80):null; const replyToId=payload?.replyToId?Number(payload.replyToId):null;
     if(!isMember(cid,user.id)) return ack?.({ok:false,error:'not_a_member'});
+    if(directConversationBlocked(cid,user.id)) return ack?.({ok:false,error:'blocked'});
     if(!body?.trim() && !fileId) return ack?.({ok:false,error:'empty_message'});
     try {
       const message=createMessage(cid,user.id,body,fileId,clientNonce,replyToId);

@@ -8,12 +8,13 @@ export type ReplyPreview = { id:number; sender:User; type:'text'|'image'|'file';
 export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; deletedAt:string|null; replyTo:ReplyPreview|null; receipts:MessageReceipt[]; reactions:MessageReaction[]; clientNonce?:string|null };
 export type ContactRequest = { id:number; sender:User; recipient:User; createdAt:string };
 export type ContactRequests = { incoming:ContactRequest[]; outgoing:ContactRequest[] };
-export type DirectoryUser = User & { relationship:'self'|'contact'|'incoming'|'outgoing'|'none' };
+export type DirectoryUser = User & { relationship:'self'|'contact'|'incoming'|'outgoing'|'blocked'|'none' };
 export type Conversation = { id:number; type:'direct'|'group'; isSelf:boolean; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
 export type InventoryAttachment = { messageId:number; sender:User; file:FileView; createdAt:string };
 export type InventoryLink = { messageId:number; sender:User; url:string; createdAt:string };
 export type ConversationInventory = { media:InventoryAttachment[]; files:InventoryAttachment[]; links:InventoryLink[] };
 export type LinkPreview = { url:string; title:string|null; description:string|null; imageUrl:string|null; siteName:string|null; hostname:string };
+export type MessageSearchResult = { message:Message };
 
 type LoginResponse = { token:string; user:User };
 
@@ -43,10 +44,14 @@ export class HomeClient {
   contacts(){ return this.api<User[]>('/api/contacts'); }
   contactRequests(){ return this.api<ContactRequests>('/api/contact-requests'); }
   directory(q=''){ return this.api<DirectoryUser[]>(`/api/directory?q=${encodeURIComponent(q)}`); }
+  searchMessages(q:string,limit=50){ return this.api<MessageSearchResult[]>(`/api/search/messages?q=${encodeURIComponent(q)}&limit=${limit}`); }
   requestContact(userId:number){ return this.api<void>('/api/contact-requests',{method:'POST',body:JSON.stringify({userId})}); }
   acceptContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
   declineContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}`,{method:'DELETE'}); }
   removeContact(userId:number){ return this.api<void>(`/api/contacts/${userId}`,{method:'DELETE'}); }
+  blocked(){ return this.api<User[]>('/api/blocks'); }
+  block(userId:number){ return this.api<void>('/api/blocks',{method:'POST',body:JSON.stringify({userId})}); }
+  unblock(userId:number){ return this.api<void>(`/api/blocks/${userId}`,{method:'DELETE'}); }
   conversations(){ return this.api<Conversation[]>('/api/conversations'); }
   messages(conversationId:number,before?:number){ return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`); }
   inventory(conversationId:number){ return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`); }

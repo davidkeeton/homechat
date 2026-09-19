@@ -335,3 +335,16 @@ button{cursor:pointer}
 .directory-search{width:100%;margin:0 0 8px;background:var(--panel-3);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 12px;outline:none}
 .directory-search:focus{border-color:var(--accent)}
 .directory-list{max-height:280px;overflow:auto}
+
+
+/* ===== v0.9 command/search + mentions ===== */
+.command-backdrop{position:fixed;inset:0;z-index:180;background:rgba(4,5,9,.48);display:flex;justify-content:center;align-items:flex-start;padding-top:min(13vh,120px)}
+.command-palette{width:min(680px,94vw);max-height:70vh;overflow:hidden;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.6);display:flex;flex-direction:column}
+.command-palette>input{width:100%;border:0;border-bottom:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:17px;padding:16px 18px;outline:none}
+.command-results{overflow:auto;max-height:56vh;padding:7px}
+.command-results>button{width:100%;border:0;background:transparent;color:var(--text);display:grid;grid-template-columns:1fr auto;gap:3px 12px;text-align:left;padding:10px 12px;border-radius:10px}
+.command-results>button:hover{background:var(--panel-3)}
+.command-results strong{grid-column:1;font-size:13px}.command-results span{grid-column:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-dim)}.command-results small{grid-column:2;grid-row:1/3;color:var(--text-faint);align-self:center}
+.command-help{display:flex;flex-wrap:wrap;gap:7px;padding:12px}.command-help button{border:1px solid var(--border);background:var(--panel-3);color:var(--accent-line);border-radius:9px;padding:7px 10px}.command-help p{width:100%;margin:8px 2px;color:var(--text-dim);font-size:13px}
+.mention-suggest{position:absolute;left:14px;bottom:64px;width:min(360px,calc(100% - 28px));z-index:25;background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:5px;box-shadow:0 16px 45px rgba(0,0,0,.45)}
+.composer-wrap{position:relative}.mention-suggest>button{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;color:var(--text);text-align:left;padding:7px 9px;border-radius:9px}.mention-suggest>button:hover{background:var(--panel-3)}.mention-suggest .avatar{width:30px;height:30px;border-radius:9px}.mention-suggest span{display:flex;flex-direction:column}.mention-suggest small{color:var(--text-dim)}

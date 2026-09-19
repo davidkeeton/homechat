@@ -2,7 +2,7 @@
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
-## v0.8 social + message interaction pass
+## v0.9 social + message interaction pass
 
 - Contact list and contact requests
 - Searchable user directory by name, username, or HID
@@ -128,3 +128,12 @@ HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end e
 - Local unread-count reconciliation for active/inactive conversations without a full conversation refresh.
 - In-memory authenticated attachment object-URL cache so scrolling does not repeatedly download the same media.
 - No forwarding; message forwarding remains intentionally out of scope.
+
+
+## v0.9 additions
+
+- Global message search via the command palette (`Ctrl+K` / `Cmd+K`).
+- IRC-inspired command palette: `/msg -friend`, `/msg -hid`, `/saved`, `/contacts`, `/help`.
+- Persistent per-conversation drafts stored locally in the browser.
+- Group mention autocomplete for `@username`.
+- Block/unblock list with server-side enforcement for direct contact requests, direct-conversation creation, and direct messages.
