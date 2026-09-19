@@ -80,3 +80,27 @@ Server → client:
 - Group permissions are intentionally simple in v0.1: any current member can rename/add/remove members. Add group-owner/admin roles before Internet exposure.
 - File downloads are limited to the uploader or a member of a conversation referencing the file.
 - Intended for LAN/VPN use in this version.
+
+## v0.2 browser client
+
+The Docker image now builds and serves a React client from the same HomeChat service. After rebuilding, browse to:
+
+    http://SERVER-IP:8092
+
+Implemented in the first client pass:
+
+- Username/password login and persistent browser session
+- Direct conversations and group creation
+- Conversation list and unread badges
+- Realtime messages over Socket.IO
+- Online/offline presence
+- Typing indicators
+- Drag-and-drop / picker file uploads
+- Inline authenticated image previews
+- Admin "add user" dialog
+- Responsive WhatsApp/ICQ-style two-pane interface
+
+Rebuild after pulling the v0.2 files:
+
+    docker compose down
+    docker compose up -d --build
