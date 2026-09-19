@@ -137,3 +137,40 @@ HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end e
 - Persistent per-conversation drafts stored locally in the browser.
 - Group mention autocomplete for `@username`.
 - Block/unblock list with server-side enforcement for direct contact requests, direct-conversation creation, and direct messages.
+
+## v0.10 identity, privacy and administration
+
+v0.10 adds the service-management layer without changing HomeChat's direct/group-chat focus.
+
+### Self-registration
+
+Self-registration is disabled by default. Administrators can enable it from the Administration screen and optionally require an invite code. New self-registered accounts receive an HID automatically and are standard users.
+
+### Privacy
+
+Each user can manage privacy from **My Details**:
+
+- Direct messages: Everyone / Contacts only / Nobody
+- Contact requests: Everyone / Nobody
+- Presence: Everyone / Contacts only / Nobody
+- User-directory visibility
+
+Direct-message and contact-request rules are enforced on the server, not only in the browser. Presence snapshots and updates respect presence visibility.
+
+### Administration
+
+Administrators now open a separate Administration screen instead of an admin modal inside chat. It includes:
+
+- user, message, file and storage totals
+- enable/disable self-registration
+- optional registration invite code
+- runtime server attachment-size limit
+- create local users/admins
+- enable/disable accounts
+- reset user passwords and revoke their sessions
+
+Disabled accounts have their sessions revoked and connected sockets are disconnected.
+
+### Upload limit
+
+`MAX_UPLOAD_BYTES` remains the initial default for a fresh database. Once changed from Administration, the database-backed value is used immediately for new uploads.

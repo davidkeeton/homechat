@@ -9,12 +9,12 @@ import multer from 'multer';
 import { Server as SocketServer } from 'socket.io';
 import { config } from './config.js';
 import { requireAuth } from './auth.js';
-import { randomStoredName, verifyPassword } from './security.js';
+import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
-  acceptContactRequest, blockUser, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
-  directConversationBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getUserById, getUserForLogin, history,
-  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setUserAvatar, toggleReaction, unblockUser, userCount,
-  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser
+  acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
+  directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
+  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
+  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting
 } from './db.js';
 import type { LinkPreview } from './types.js';
 
@@ -22,7 +22,7 @@ const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.9.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.10.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -31,6 +31,18 @@ app.post('/api/setup', (req,res)=>{
   const user = createUser(username,displayName,password,true);
   const token = createSession(user.id);
   res.status(201).json({token,user});
+});
+
+app.get('/api/public-config',(_req,res)=>res.json(getServiceSettings()));
+app.post('/api/auth/register',(req,res)=>{
+  const settings=getServiceSettings();
+  if(!settings.registrationEnabled) return res.status(403).json({error:'registration_disabled'});
+  const {username,displayName,password,inviteCode}=req.body??{};
+  if(!username||!displayName||typeof password!=='string'||password.length<8) return res.status(400).json({error:'invalid_input'});
+  const inviteHash=setting('registration_invite_hash','');
+  if(inviteHash&&hashToken(String(inviteCode??''))!==inviteHash) return res.status(403).json({error:'invalid_invite'});
+  try{const user=createUser(String(username),String(displayName),password,false);res.status(201).json({token:createSession(user.id),user});}
+  catch{res.status(409).json({error:'username_exists'});}
 });
 
 app.post('/api/auth/login',(req,res)=>{
@@ -42,13 +54,35 @@ app.post('/api/auth/login',(req,res)=>{
 });
 app.post('/api/auth/logout',requireAuth,(req,res)=>{ revokeToken(req.token!); res.status(204).end(); });
 app.get('/api/me',requireAuth,(req,res)=>res.json(req.user));
-app.get('/api/users',requireAuth,(_req,res)=>res.json(listUsers()));
+app.get('/api/users',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.id,'').map(({relationship,...user})=>user)));
 app.post('/api/users',requireAuth,(req,res)=>{
   if (!req.user!.isAdmin) return res.status(403).json({error:'admin_required'});
   const {username,displayName,password,isAdmin=false}=req.body ?? {};
   if (!username || !displayName || typeof password!=='string' || password.length<8) return res.status(400).json({error:'invalid_input'});
   try { res.status(201).json(createUser(username,displayName,password,Boolean(isAdmin))); }
   catch { res.status(409).json({error:'username_exists'}); }
+});
+
+app.get('/api/me/privacy',requireAuth,(req,res)=>res.json(getPrivacy(req.user!.id)));
+app.put('/api/me/privacy',requireAuth,(req,res)=>{try{const value=setPrivacy(req.user!.id,req.body??{});syncPresenceVisibility(req.user!.id);res.json(value);}catch(e:any){res.status(400).json({error:e?.message||'invalid_privacy'});}});
+
+function requireAdmin(req:any,res:any): boolean {if(!req.user?.isAdmin){res.status(403).json({error:'admin_required'});return false;}return true;}
+app.get('/api/admin/overview',requireAuth,(req,res)=>{if(!requireAdmin(req,res))return;res.json({settings:getServiceSettings(),storage:storageStats()});});
+app.get('/api/admin/users',requireAuth,(req,res)=>{if(!requireAdmin(req,res))return;res.json(adminUsers());});
+app.put('/api/admin/settings',requireAuth,(req,res)=>{
+  if(!requireAdmin(req,res))return;
+  const body=req.body??{};
+  const inviteHash=body.inviteCode===undefined?undefined:(String(body.inviteCode).trim()==='__clear__'?null:(String(body.inviteCode).trim()?hashToken(String(body.inviteCode).trim()):null));
+  try{res.json(updateServiceSettings({registrationEnabled:body.registrationEnabled,inviteHash,maxUploadBytes:body.maxUploadBytes}));}
+  catch(e:any){res.status(400).json({error:e?.message||'invalid_settings'});}
+});
+app.patch('/api/admin/users/:id',requireAuth,(req,res)=>{
+  if(!requireAdmin(req,res))return;const id=Number(req.params.id);if(id===req.user!.id&&req.body?.disabled===true)return res.status(400).json({error:'cannot_disable_self'});
+  if(!getUserForLogin(String((adminUsers().find(u=>u.id===id)?.username)||'')))return res.status(404).json({error:'not_found'});
+  if(typeof req.body?.disabled==='boolean'){setUserDisabled(id,req.body.disabled);if(req.body.disabled)io.to(roomForUser(id)).disconnectSockets(true);}res.status(204).end();
+});
+app.post('/api/admin/users/:id/reset-password',requireAuth,(req,res)=>{
+  if(!requireAdmin(req,res))return;const password=String(req.body?.password??'');try{resetUserPassword(Number(req.params.id),password);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'reset_failed'});}
 });
 
 
@@ -77,6 +111,7 @@ app.post('/api/conversations/self',requireAuth,(req,res)=>res.status(201).json({
 app.post('/api/conversations/direct',requireAuth,(req,res)=>{
   const otherId=Number(req.body?.userId); if (!getUserById(otherId) || otherId===req.user!.id) return res.status(400).json({error:'invalid_user'});
   if(isBlockedPair(req.user!.id,otherId)) return res.status(403).json({error:'blocked'});
+  if(!canMessageUser(req.user!.id,otherId)) return res.status(403).json({error:'dm_not_allowed'});
   const id=findOrCreateDirect(req.user!.id,otherId); res.status(201).json({id});
 });
 app.post('/api/conversations/group',requireAuth,(req,res)=>{
@@ -114,13 +149,13 @@ const storage=multer.diskStorage({
   destination:(_req,_file,cb)=>cb(null,config.uploadDir),
   filename:(_req,file,cb)=>cb(null,randomStoredName(path.extname(file.originalname).slice(0,12)))
 });
-const upload=multer({storage,limits:{fileSize:config.maxUploadBytes}});
-app.post('/api/files',requireAuth,upload.single('file'),(req,res)=>{
+const uploadSingle=(req:any,res:any,next:any)=>multer({storage,limits:{fileSize:getServiceSettings().maxUploadBytes}}).single('file')(req,res,(err:any)=>{if(err?.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'file_too_large',maxBytes:getServiceSettings().maxUploadBytes});if(err)return res.status(400).json({error:'upload_failed'});next();});
+app.post('/api/files',requireAuth,uploadSingle,(req,res)=>{
   if (!req.file) return res.status(400).json({error:'missing_file'});
   const id=insertFile(req.user!.id,req.file.originalname,req.file.filename,req.file.mimetype || 'application/octet-stream',req.file.size);
   res.status(201).json({id,name:req.file.originalname,mimeType:req.file.mimetype,size:req.file.size,url:`/api/files/${id}`});
 });
-app.post('/api/me/avatar',requireAuth,upload.single('file'),(req,res)=>{
+app.post('/api/me/avatar',requireAuth,uploadSingle,(req,res)=>{
   if (!req.file) return res.status(400).json({error:'missing_file'});
   if (!String(req.file.mimetype).startsWith('image/')) {
     try { fs.unlinkSync(req.file.path); } catch {}
@@ -218,7 +253,8 @@ const server=http.createServer(app);
 const io=new SocketServer(server,{cors:{origin:true,credentials:true}});
 const online=new Map<number,number>();
 function roomForUser(id:number){return `user:${id}`;}
-function broadcastPresence(userId:number,isOnline:boolean){io.emit('presence:update',{userId,online:isOnline});}
+function broadcastPresence(userId:number,isOnline:boolean){for(const viewer of listUsers())if(canSeePresence(viewer.id,userId))io.to(roomForUser(viewer.id)).emit('presence:update',{userId,online:isOnline});}
+function syncPresenceVisibility(userId:number){for(const viewer of listUsers())io.to(roomForUser(viewer.id)).emit('presence:update',{userId,online:online.has(userId)&&canSeePresence(viewer.id,userId)});}
 
 io.use((socket,next)=>{
   const token=String(socket.handshake.auth?.token ?? socket.handshake.headers.authorization?.toString().replace(/^Bearer\s+/,'') ?? '');
@@ -229,7 +265,7 @@ io.on('connection',(socket)=>{
   const user=socket.data.user as {id:number};
   socket.join(roomForUser(user.id));
   const count=(online.get(user.id)??0)+1; online.set(user.id,count); if(count===1) broadcastPresence(user.id,true);
-  socket.emit('presence:snapshot',{userIds:[...online.keys()]});
+  socket.emit('presence:snapshot',{userIds:[...online.keys()].filter(id=>canSeePresence(user.id,id))});
 
   socket.on('conversation:join',(payload,ack)=>{
     const cid=Number(payload?.conversationId); if(!isMember(cid,user.id)) return ack?.({ok:false,error:'not_a_member'});
@@ -239,6 +275,7 @@ io.on('connection',(socket)=>{
     const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null; const clientNonce=typeof payload?.clientNonce==='string'?payload.clientNonce.slice(0,80):null; const replyToId=payload?.replyToId?Number(payload.replyToId):null;
     if(!isMember(cid,user.id)) return ack?.({ok:false,error:'not_a_member'});
     if(directConversationBlocked(cid,user.id)) return ack?.({ok:false,error:'blocked'});
+    if(directConversationPrivacyBlocked(cid,user.id)) return ack?.({ok:false,error:'dm_not_allowed'});
     if(!body?.trim() && !fileId) return ack?.({ok:false,error:'empty_message'});
     try {
       const message=createMessage(cid,user.id,body,fileId,clientNonce,replyToId);

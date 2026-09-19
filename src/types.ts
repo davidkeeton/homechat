@@ -117,3 +117,27 @@ export interface DirectoryUser extends PublicUser {
 export interface MessageSearchResult {
   message: MessageView;
 }
+
+
+export interface PrivacySettings {
+  dmPolicy:'everyone'|'contacts'|'nobody';
+  contactPolicy:'everyone'|'nobody';
+  presencePolicy:'everyone'|'contacts'|'nobody';
+  directoryVisible:boolean;
+}
+
+export interface PublicServiceConfig {
+  registrationEnabled:boolean;
+  inviteRequired:boolean;
+  maxUploadBytes:number;
+}
+
+export interface AdminUserView extends PublicUser {
+  disabled:boolean;
+  createdAt:string;
+}
+
+export interface AdminOverview {
+  settings:PublicServiceConfig;
+  storage:{fileCount:number;bytes:number;messageCount:number;userCount:number};
+}

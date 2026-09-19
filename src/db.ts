@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS link_previews (
   hostname TEXT NOT NULL,
   fetched_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS server_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_privacy (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  dm_policy TEXT NOT NULL DEFAULT 'everyone' CHECK(dm_policy IN ('everyone','contacts','nobody')),
+  contact_policy TEXT NOT NULL DEFAULT 'everyone' CHECK(contact_policy IN ('everyone','nobody')),
+  presence_policy TEXT NOT NULL DEFAULT 'everyone' CHECK(presence_policy IN ('everyone','contacts','nobody')),
+  directory_visible INTEGER NOT NULL DEFAULT 1
+);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id,id DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(token_hash);
 `);
@@ -122,6 +133,19 @@ if (!messageColumnsV08.some(c => String(c.name) === 'deleted_at')) db.exec('ALTE
 db.exec('CREATE INDEX IF NOT EXISTS idx_contact_requests_recipient ON contact_requests(recipient_id);');
 db.exec('CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);');
 db.exec('CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);');
+
+// v0.10 migration: service settings and per-user privacy.
+const defaultSettings: Record<string,string> = {
+  registration_enabled: '0',
+  registration_invite_hash: '',
+  max_upload_bytes: String(config.maxUploadBytes),
+};
+for (const [key,value] of Object.entries(defaultSettings)) {
+  db.prepare('INSERT OR IGNORE INTO server_settings(key,value) VALUES(?,?)').run(key,value);
+}
+for (const row of db.prepare('SELECT id FROM users').all() as any[]) {
+  db.prepare('INSERT OR IGNORE INTO user_privacy(user_id) VALUES(?)').run(Number(row.id));
+}
 
 // v0.4 migration: existing v0.1-v0.3 databases do not have HIDs.
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
@@ -158,7 +182,9 @@ export function userCount(): number {
 export function createUser(username: string, displayName: string, password: string, isAdmin = false): PublicUser {
   const info = db.prepare(`INSERT INTO users(hid,username,display_name,password_hash,is_admin) VALUES(?,?,?,?,?)`)
     .run(newHid(), username.trim(), displayName.trim(), hashPassword(password), isAdmin ? 1 : 0);
-  return getUserById(Number(info.lastInsertRowid))!;
+  const id=Number(info.lastInsertRowid);
+  db.prepare('INSERT OR IGNORE INTO user_privacy(user_id) VALUES(?)').run(id);
+  return getUserById(id)!;
 }
 
 export function getUserById(id: number): PublicUser | null {
@@ -524,7 +550,7 @@ export function contactRequests(userId:number): ContactRequestsView {
 
 export function searchDirectory(userId:number,q:string): DirectoryUser[] {
   const term=q.trim(); const like=`%${term}%`;
-  const rows=(term?db.prepare(`SELECT * FROM users WHERE disabled=0 AND (display_name LIKE ? COLLATE NOCASE OR username LIKE ? COLLATE NOCASE OR hid LIKE ? COLLATE NOCASE) ORDER BY display_name COLLATE NOCASE LIMIT 100`).all(like,like,like):db.prepare('SELECT * FROM users WHERE disabled=0 ORDER BY display_name COLLATE NOCASE LIMIT 100').all()) as any[];
+  const rows=(term?db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) AND (u.display_name LIKE ? COLLATE NOCASE OR u.username LIKE ? COLLATE NOCASE OR u.hid LIKE ? COLLATE NOCASE) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId,like,like,like):db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId)) as any[];
   return rows.map(row=>{
     const u=publicUser(row); let relationship:DirectoryUser['relationship']='none';
     if(u.id===userId) relationship='self';
@@ -540,6 +566,7 @@ export function sendContactRequest(senderId:number,recipientId:number): void {
   if(senderId===recipientId) throw new Error('invalid_user');
   if(!getUserById(recipientId)) throw new Error('invalid_user');
   if(isBlockedPair(senderId,recipientId)) throw new Error('blocked');
+  if(!canSendContactRequest(senderId,recipientId)) throw new Error('contact_requests_disabled');
   if(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(senderId,recipientId)) throw new Error('already_contact');
   const reverse=db.prepare('SELECT id FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(recipientId,senderId) as any;
   if(reverse){acceptContactRequest(Number(reverse.id),senderId);return;}
@@ -566,4 +593,134 @@ export function declineContactRequest(requestId:number,userId:number): void {
 export function removeContact(userId:number,contactId:number): void {
   db.exec('BEGIN');
   try{db.prepare('DELETE FROM contacts WHERE user_id=? AND contact_id=?').run(userId,contactId);db.prepare('DELETE FROM contacts WHERE user_id=? AND contact_id=?').run(contactId,userId);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+}
+
+
+export type PrivacySettings = {
+  dmPolicy:'everyone'|'contacts'|'nobody';
+  contactPolicy:'everyone'|'nobody';
+  presencePolicy:'everyone'|'contacts'|'nobody';
+  directoryVisible:boolean;
+};
+
+export type ServiceSettings = {
+  registrationEnabled:boolean;
+  inviteRequired:boolean;
+  maxUploadBytes:number;
+};
+
+export type AdminUserView = PublicUser & { disabled:boolean; createdAt:string };
+
+function ensurePrivacy(userId:number): void {
+  db.prepare('INSERT OR IGNORE INTO user_privacy(user_id) VALUES(?)').run(userId);
+}
+
+export function getPrivacy(userId:number): PrivacySettings {
+  ensurePrivacy(userId);
+  const r=db.prepare('SELECT * FROM user_privacy WHERE user_id=?').get(userId) as any;
+  return {
+    dmPolicy:String(r.dm_policy) as PrivacySettings['dmPolicy'],
+    contactPolicy:String(r.contact_policy) as PrivacySettings['contactPolicy'],
+    presencePolicy:String(r.presence_policy) as PrivacySettings['presencePolicy'],
+    directoryVisible:Boolean(r.directory_visible),
+  };
+}
+
+export function setPrivacy(userId:number, next:Partial<PrivacySettings>): PrivacySettings {
+  const cur=getPrivacy(userId);
+  const dm=next.dmPolicy??cur.dmPolicy;
+  const contact=next.contactPolicy??cur.contactPolicy;
+  const presence=next.presencePolicy??cur.presencePolicy;
+  const visible=next.directoryVisible??cur.directoryVisible;
+  if(!['everyone','contacts','nobody'].includes(dm)) throw new Error('invalid_dm_policy');
+  if(!['everyone','nobody'].includes(contact)) throw new Error('invalid_contact_policy');
+  if(!['everyone','contacts','nobody'].includes(presence)) throw new Error('invalid_presence_policy');
+  db.prepare('UPDATE user_privacy SET dm_policy=?,contact_policy=?,presence_policy=?,directory_visible=? WHERE user_id=?').run(dm,contact,presence,visible?1:0,userId);
+  return getPrivacy(userId);
+}
+
+export function areContacts(a:number,b:number): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(a,b));
+}
+
+export function canMessageUser(senderId:number,recipientId:number): boolean {
+  if(senderId===recipientId) return true;
+  if(isBlockedPair(senderId,recipientId)) return false;
+  const p=getPrivacy(recipientId);
+  if(p.dmPolicy==='nobody') return false;
+  if(p.dmPolicy==='contacts') return areContacts(recipientId,senderId);
+  return true;
+}
+
+export function canSendContactRequest(senderId:number,recipientId:number): boolean {
+  if(senderId===recipientId || isBlockedPair(senderId,recipientId)) return false;
+  return getPrivacy(recipientId).contactPolicy==='everyone';
+}
+
+export function canSeePresence(viewerId:number,subjectId:number): boolean {
+  if(viewerId===subjectId) return true;
+  if(isBlockedPair(viewerId,subjectId)) return false;
+  const p=getPrivacy(subjectId);
+  if(p.presencePolicy==='nobody') return false;
+  if(p.presencePolicy==='contacts') return areContacts(subjectId,viewerId);
+  return true;
+}
+
+export function directConversationPrivacyBlocked(conversationId:number,senderId:number): boolean {
+  const row=db.prepare("SELECT type FROM conversations WHERE id=?").get(conversationId) as any;
+  if(!row||String(row.type)!=='direct') return false;
+  const others=conversationMemberIds(conversationId).filter(id=>id!==senderId);
+  return others.some(id=>!canMessageUser(senderId,id));
+}
+
+export function setting(key:string, fallback=''): string {
+  const row=db.prepare('SELECT value FROM server_settings WHERE key=?').get(key) as any;
+  return row?String(row.value):fallback;
+}
+
+export function setSetting(key:string,value:string): void {
+  db.prepare('INSERT INTO server_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,value);
+}
+
+export function getServiceSettings(): ServiceSettings {
+  return {
+    registrationEnabled:setting('registration_enabled','0')==='1',
+    inviteRequired:Boolean(setting('registration_invite_hash','')),
+    maxUploadBytes:Math.max(1024,Number(setting('max_upload_bytes',String(config.maxUploadBytes)))||config.maxUploadBytes),
+  };
+}
+
+export function updateServiceSettings(input:{registrationEnabled?:boolean;inviteHash?:string|null;maxUploadBytes?:number}): ServiceSettings {
+  if(typeof input.registrationEnabled==='boolean') setSetting('registration_enabled',input.registrationEnabled?'1':'0');
+  if(input.inviteHash!==undefined) setSetting('registration_invite_hash',input.inviteHash??'');
+  if(input.maxUploadBytes!==undefined){
+    const n=Math.floor(Number(input.maxUploadBytes));
+    if(!Number.isFinite(n)||n<1024*1024||n>20*1024*1024*1024) throw new Error('invalid_upload_limit');
+    setSetting('max_upload_bytes',String(n));
+  }
+  return getServiceSettings();
+}
+
+export function adminUsers(): AdminUserView[] {
+  return (db.prepare('SELECT * FROM users ORDER BY created_at DESC,id DESC').all() as any[]).map(r=>({
+    ...publicUser(r),disabled:Boolean(r.disabled),createdAt:String(r.created_at)
+  }));
+}
+
+export function setUserDisabled(userId:number,disabled:boolean): void {
+  db.prepare('UPDATE users SET disabled=? WHERE id=?').run(disabled?1:0,userId);
+  if(disabled) db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+}
+
+export function resetUserPassword(userId:number,password:string): void {
+  if(password.length<8) throw new Error('password_too_short');
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),userId);
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+}
+
+export function storageStats(): {fileCount:number;bytes:number;messageCount:number;userCount:number} {
+  const f=db.prepare('SELECT COUNT(*) AS n,COALESCE(SUM(size),0) AS bytes FROM files').get() as any;
+  const m=db.prepare('SELECT COUNT(*) AS n FROM messages').get() as any;
+  const u=db.prepare('SELECT COUNT(*) AS n FROM users').get() as any;
+  return {fileCount:Number(f.n),bytes:Number(f.bytes),messageCount:Number(m.n),userCount:Number(u.n)};
 }

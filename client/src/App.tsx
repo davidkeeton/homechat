@@ -10,6 +10,9 @@ import {
   type LinkPreview,
   type Message,
   type MessageSearchResult,
+  type PrivacySettings,
+  type AdminOverview,
+  type AdminUser,
   type User,
 } from './lib/homeClient';
 
@@ -39,14 +42,19 @@ function Avatar({name,online=false,avatarUrl,size='normal',onClick}:{name:string
 }
 
 function Login({onLogin}:{onLogin:(s:Session)=>void}){
-  const [username,setUsername]=useState(''); const [password,setPassword]=useState(''); const [error,setError]=useState(''); const [busy,setBusy]=useState(false);
-  async function submit(e:React.FormEvent){ e.preventDefault(); setBusy(true); setError(''); try{ const s=await HomeClient.login(BASE_URL,username,password); localStorage.setItem('homechat.session',JSON.stringify(s)); onLogin(s); }catch(e:any){setError(e.message||'Login failed');}finally{setBusy(false);} }
+  const [username,setUsername]=useState(''); const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [inviteCode,setInviteCode]=useState('');
+  const [error,setError]=useState(''); const [busy,setBusy]=useState(false); const [registering,setRegistering]=useState(false); const [publicConfig,setPublicConfig]=useState<{registrationEnabled:boolean;inviteRequired:boolean}|null>(null);
+  useEffect(()=>{HomeClient.publicConfig(BASE_URL).then(setPublicConfig).catch(()=>setPublicConfig({registrationEnabled:false,inviteRequired:false}));},[]);
+  async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const next=registering?await HomeClient.register(BASE_URL,username,displayName,password,inviteCode):await HomeClient.login(BASE_URL,username,password);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){setError(e.message||'Sign in failed');}finally{setBusy(false);}}
   return <div className="login-shell"><form className="login-card" onSubmit={submit}>
-    <div className="brand-mark">H</div><h1>HomeChat</h1><p>Private chat for your home.</p>
-    <label>Username<input autoFocus value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" /></label>
-    <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" /></label>
-    {error && <div className="error">{error}</div>}
-    <button className="primary" disabled={busy || !username || !password}>{busy?'Signing in…':'Sign in'}</button>
+    <div className="brand-mark">H</div><h1>HomeChat</h1><p>{registering?'Create your HomeChat account.':'Private chat for your home.'}</p>
+    {registering&&<label>Display name<input autoFocus value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete="name" /></label>}
+    <label>Username<input autoFocus={!registering} value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" /></label>
+    <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={registering?'new-password':'current-password'} /></label>
+    {registering&&publicConfig?.inviteRequired&&<label>Invite code<input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} autoComplete="off" /></label>}
+    {error&&<div className="error">{error}</div>}
+    <button className="primary full" disabled={busy||!username||!password||(registering&&!displayName)}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
+    {publicConfig?.registrationEnabled&&<button type="button" className="login-switch" onClick={()=>{setRegistering(x=>!x);setError('')}}>{registering?'Already have an account? Sign in':'Create an account'}</button>}
   </form></div>;
 }
 
@@ -113,9 +121,12 @@ function InventoryFileItem({client,item}:{client:HomeClient;item:InventoryAttach
 
 function ContextDrawer({client,conversation,me,users,online,view,target,onView,onClose,onCopy,onChangeAvatar,onRenameGroup,onAddMember,onRemoveMember,onLeaveGroup}:{client:HomeClient;conversation:Conversation|null;me:User;users:User[];online:Set<number>;view:'details'|'media'|'files'|'links';target:'me'|'conversation';onView:(v:'details'|'media'|'files'|'links')=>void;onClose:()=>void;onCopy:(text:string,label:string)=>void;onChangeAvatar:()=>void;onRenameGroup:(name:string)=>Promise<void>;onAddMember:(userId:number)=>Promise<void>;onRemoveMember:(userId:number)=>Promise<void>;onLeaveGroup:()=>Promise<void>}){
   const [inventory,setInventory]=useState<ConversationInventory|null>(null); const [loading,setLoading]=useState(false); const [groupName,setGroupName]=useState(conversation?.name||''); const [addUserId,setAddUserId]=useState('');
+  const [privacy,setPrivacyState]=useState<PrivacySettings|null>(null); const [privacyBusy,setPrivacyBusy]=useState(false);
   useEffect(()=>{setGroupName(conversation?.name||'');setAddUserId('');},[conversation?.id,conversation?.name]);
   useEffect(()=>{if(!conversation)return;let alive=true;setLoading(true);client.inventory(conversation.id).then(x=>{if(alive){setInventory(x);setLoading(false);}}).catch(()=>alive&&setLoading(false));return()=>{alive=false};},[client,conversation?.id]);
   const isMe=target==='me'||Boolean(conversation?.isSelf);
+  useEffect(()=>{if(!isMe){setPrivacyState(null);return;}client.privacy().then(setPrivacyState).catch(()=>{});},[client,isMe]);
+  async function savePrivacy(next:Partial<PrivacySettings>){setPrivacyBusy(true);try{setPrivacyState(await client.setPrivacy(next));}finally{setPrivacyBusy(false);}}
   const person=isMe?me:conversation?.type==='direct'?conversation.members.find(m=>m.id!==me.id)||me:null;
   const available=conversation?.type==='group'?users.filter(u=>!conversation.members.some(m=>m.id===u.id)):[];
   const title=isMe?'My Details':conversation?.type==='group'?(conversation.name||'Group'):(person?.displayName||'Details');
@@ -135,6 +146,7 @@ function ContextDrawer({client,conversation,me,users,online,view,target,onView,o
         <div className="details-hero"><Avatar name={person.displayName} avatarUrl={person.avatarUrl} online={isMe||online.has(person.id)} size="large"/><div><h3>{person.displayName}</h3><p>{isMe?'Your account':online.has(person.id)?'Online':'Offline'}</p></div></div>
         <section className="details-section"><div className="detail-line"><span>Username</span><strong>@{person.username}</strong><button onClick={()=>onCopy(person.username,'Username')}>Copy</button></div><div className="detail-line hid-line"><span>HID</span><strong>{person.hid}</strong><button onClick={()=>onCopy(person.hid,'HID')}>Copy</button></div>{person.isAdmin&&<div className="detail-line"><span>Role</span><strong>Administrator</strong></div>}</section>
         {isMe&&<section className="details-section"><button className="secondary full" onClick={onChangeAvatar}>Change profile picture</button></section>}
+        {isMe&&privacy&&<section className="details-section privacy-settings"><h4>Privacy</h4><label>Direct messages<select disabled={privacyBusy} value={privacy.dmPolicy} onChange={e=>void savePrivacy({dmPolicy:e.target.value as PrivacySettings['dmPolicy']})}><option value="everyone">Everyone</option><option value="contacts">Contacts only</option><option value="nobody">Nobody</option></select></label><label>Contact requests<select disabled={privacyBusy} value={privacy.contactPolicy} onChange={e=>void savePrivacy({contactPolicy:e.target.value as PrivacySettings['contactPolicy']})}><option value="everyone">Everyone</option><option value="nobody">Nobody</option></select></label><label>Presence<select disabled={privacyBusy} value={privacy.presencePolicy} onChange={e=>void savePrivacy({presencePolicy:e.target.value as PrivacySettings['presencePolicy']})}><option value="everyone">Everyone</option><option value="contacts">Contacts only</option><option value="nobody">Nobody</option></select></label><label className="privacy-check"><input type="checkbox" checked={privacy.directoryVisible} disabled={privacyBusy} onChange={e=>void savePrivacy({directoryVisible:e.target.checked})}/><span>Show me in the user directory</span></label></section>}
       </div>:<div className="inventory-empty">No details available.</div>}
     </>:loading?<div className="inventory-empty">Loading…</div>:view==='media'?<div className="media-grid">{inventory?.media.length?inventory.media.map(x=><InventoryMediaItem key={`${x.messageId}-${x.file.id}`} client={client} item={x}/>):<div className="inventory-empty">No shared media yet.</div>}</div>:view==='files'?<div className="inventory-files">{inventory?.files.length?inventory.files.map(x=><InventoryFileItem key={`${x.messageId}-${x.file.id}`} client={client} item={x}/>):<div className="inventory-empty">No shared files yet.</div>}</div>:<div className="inventory-links">{inventory?.links.length?inventory.links.map((x,i)=><div className="inventory-link" key={`${x.messageId}-${i}`}><LinkPreviewCard client={client} url={x.url} compact/><a href={x.url} target="_blank" rel="noreferrer noopener">{x.url}</a><small>{x.sender.displayName} · {fmtDateTime(x.createdAt)}</small></div>):<div className="inventory-empty">No shared links yet.</div>}</div>}</div>
   </aside>;
@@ -179,17 +191,23 @@ function CommandPalette({client,me,users,conversations,onClose,onOpenConversatio
   return <div className="command-backdrop" onMouseDown={onClose}><div className="command-palette" onMouseDown={e=>e.stopPropagation()}><input autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&q.startsWith('/')){e.preventDefault();run();}if(e.key==='Escape')onClose();}} placeholder="Search messages or type /help"/>{q.startsWith('/')?<div className="command-help"><button onClick={()=>setQ('/msg -friend ')}>/msg -friend</button><button onClick={()=>setQ('/msg -hid ')}>/msg -hid</button><button onClick={()=>setQ('/saved')}>/saved</button><button onClick={()=>setQ('/contacts')}>/contacts</button><button onClick={()=>setQ('/help')}>/help</button>{q.includes('Commands:')&&<p>{q}</p>}</div>:<div className="command-results">{busy&&<div className="inventory-empty">Searching…</div>}{!busy&&q.trim().length>=2&&!results.length&&<div className="inventory-empty">No matching messages.</div>}{results.map(r=><button key={r.message.id} onClick={()=>{onOpenConversation(r.message.conversationId);onClose();}}><strong>{convName(r.message.conversationId)}</strong><span>{r.message.sender.displayName}: {r.message.body}</span><small>{fmtDateTime(r.message.createdAt)}</small></button>)}</div>}</div></div>;
 }
 
-function AdminModal({client,onClose,onCreated}:{client:HomeClient;onClose:()=>void;onCreated:()=>void}){
-  const [username,setUsername]=useState(''); const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [error,setError]=useState('');
-  async function create(){try{await client.createUser(username,displayName,password);onCreated();onClose();}catch(e:any){setError(e.message||'Failed');}}
-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal small" onMouseDown={e=>e.stopPropagation()}>
-    <div className="modal-head"><h3>Add user</h3><button onClick={onClose}>×</button></div>
-    <label className="field">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)}/></label>
-    <label className="field">Username<input value={username} onChange={e=>setUsername(e.target.value)}/></label>
-    <label className="field">Temporary password<input type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label>
-    {error&&<div className="error">{error}</div>}
-    <button className="primary full" disabled={!username||!displayName||password.length<8} onClick={create}>Create user</button>
-  </div></div>;
+function AdminPanel({client,me,onClose,onUsersChanged}:{client:HomeClient;me:User;onClose:()=>void;onUsersChanged:()=>void}){
+  const [overview,setOverview]=useState<AdminOverview|null>(null); const [users,setUsers]=useState<AdminUser[]>([]); const [error,setError]=useState(''); const [busy,setBusy]=useState(false);
+  const [registrationEnabled,setRegistrationEnabled]=useState(false); const [inviteCode,setInviteCode]=useState(''); const [maxMb,setMaxMb]=useState('100');
+  const [username,setUsername]=useState(''); const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [newAdmin,setNewAdmin]=useState(false); const [resetPasswords,setResetPasswords]=useState<Record<number,string>>({});
+  async function load(){try{const [o,u]=await Promise.all([client.adminOverview(),client.adminUsers()]);setOverview(o);setUsers(u);setRegistrationEnabled(o.settings.registrationEnabled);setMaxMb(String(Math.round(o.settings.maxUploadBytes/1024/1024)));}catch(e:any){setError(e.message||'Could not load admin data');}}
+  useEffect(()=>{void load();},[client]);
+  async function saveSettings(){setBusy(true);setError('');try{const payload:{registrationEnabled?:boolean;inviteCode?:string;maxUploadBytes?:number}={registrationEnabled,maxUploadBytes:Math.max(1,Number(maxMb)||100)*1024*1024};const code=inviteCode.trim();if(code)payload.inviteCode=code.toLowerCase()==='clear'?'__clear__':code;await client.updateAdminSettings(payload);setInviteCode('');await load();}catch(e:any){setError(e.message||'Could not save settings');}finally{setBusy(false);}}
+  async function create(){setBusy(true);setError('');try{await client.createUser(username,displayName,password,newAdmin);setUsername('');setDisplayName('');setPassword('');setNewAdmin(false);await load();onUsersChanged();}catch(e:any){setError(e.message||'Could not create user');}finally{setBusy(false);}}
+  async function toggleUser(u:AdminUser){setBusy(true);try{await client.setUserDisabled(u.id,!u.disabled);await load();onUsersChanged();}catch(e:any){setError(e.message||'Could not update user');}finally{setBusy(false);}}
+  async function resetPassword(u:AdminUser){const pw=resetPasswords[u.id]||'';if(pw.length<8)return;setBusy(true);try{await client.resetUserPassword(u.id,pw);setResetPasswords(x=>({...x,[u.id]:''}));}catch(e:any){setError(e.message||'Could not reset password');}finally{setBusy(false);}}
+  return <div className="admin-plane"><header className="admin-header"><div><div className="brand-mark">H</div><span><strong>HomeChat Administration</strong><small>Server and account management</small></span></div><button className="secondary" onClick={onClose}>Back to chat</button></header>
+    <main className="admin-content">{error&&<div className="error">{error}</div>}
+      <section className="admin-stats"><div><strong>{overview?.storage.userCount??'—'}</strong><span>Users</span></div><div><strong>{overview?.storage.messageCount??'—'}</strong><span>Messages</span></div><div><strong>{overview?.storage.fileCount??'—'}</strong><span>Files</span></div><div><strong>{overview?fmtBytes(overview.storage.bytes):'—'}</strong><span>Storage</span></div></section>
+      <div className="admin-grid"><section className="admin-card"><h2>Registration & storage</h2><label className="admin-toggle"><input type="checkbox" checked={registrationEnabled} onChange={e=>setRegistrationEnabled(e.target.checked)}/><span>Allow self-registration</span></label><label>Invite code <small>Leave blank to keep the current code. Enter <b>clear</b> to remove it.</small><input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} placeholder={overview?.settings.inviteRequired?'Invite code configured':'No invite code'}/></label><label>Maximum server attachment size (MB)<input type="number" min="1" max="20480" value={maxMb} onChange={e=>setMaxMb(e.target.value)}/></label><button className="primary" disabled={busy} onClick={()=>void saveSettings()}>Save server settings</button></section>
+      <section className="admin-card"><h2>Create user</h2><label>Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)}/></label><label>Username<input value={username} onChange={e=>setUsername(e.target.value)}/></label><label>Temporary password<input type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label><label className="admin-toggle"><input type="checkbox" checked={newAdmin} onChange={e=>setNewAdmin(e.target.checked)}/><span>Administrator</span></label><button className="primary" disabled={busy||!username||!displayName||password.length<8} onClick={()=>void create()}>Create user</button></section></div>
+      <section className="admin-card admin-users"><h2>Users</h2>{users.map(u=><div className={`admin-user ${u.disabled?'disabled':''}`} key={u.id}><Avatar name={u.displayName} avatarUrl={u.avatarUrl}/><div className="admin-user-copy"><strong>{u.displayName}{u.id===me.id?' (you)':''}</strong><small>@{u.username} · {u.hid} · {u.isAdmin?'Admin':'User'}{u.disabled?' · Disabled':''}</small></div><input type="password" placeholder="New password" value={resetPasswords[u.id]||''} onChange={e=>setResetPasswords(x=>({...x,[u.id]:e.target.value}))}/><button disabled={busy||(resetPasswords[u.id]||'').length<8} onClick={()=>void resetPassword(u)}>Reset password</button><button className={u.disabled?'':'quiet-danger'} disabled={busy||u.id===me.id} onClick={()=>void toggleUser(u)}>{u.disabled?'Enable':'Disable'}</button></div>)}</section>
+    </main></div>;
 }
 
 export default function App(){
@@ -441,10 +459,12 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     return nodes;
   }
 
+  if(admin) return <AdminPanel client={client} me={me} onClose={()=>setAdmin(false)} onUsersChanged={()=>void refresh()}/>;
+
   return <div className="app-shell" onClick={()=>{if(audioRef.current?.state==='suspended')void audioRef.current.resume();}}>
     {connection!=='connected'&&<div className={`connection-pill ${connection}`}>{connection==='reconnecting'?'Reconnecting…':'Offline'}</div>}
     <aside className="sidebar">
-      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>@{me.username}</small></div></div><div className="top-actions"><button title="Command palette (Ctrl+K)" onClick={()=>setCommandOpen(true)}>⌘</button><button title="Contacts & directory" onClick={()=>setContactsOpen(true)}>☷</button><button title={notificationPermission==='granted'?'Notifications enabled':'Enable notifications'} className={notificationPermission==='granted'?'enabled':''} onClick={()=>void enableNotifications()}>{notificationPermission==='granted'?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Add user" onClick={()=>setAdmin(true)}>＋</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={onLogout}>↪</button></div></div>
+      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>@{me.username}</small></div></div><div className="top-actions"><button title="Command palette (Ctrl+K)" onClick={()=>setCommandOpen(true)}>⌘</button><button title="Contacts & directory" onClick={()=>setContactsOpen(true)}>☷</button><button title={notificationPermission==='granted'?'Notifications enabled':'Enable notifications'} className={notificationPermission==='granted'?'enabled':''} onClick={()=>void enableNotifications()}>{notificationPermission==='granted'?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Administration" onClick={()=>setAdmin(true)}>⚙</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={onLogout}>↪</button></div></div>
       <div className="search"><input placeholder="Search conversations" value={search} onChange={e=>setSearch(e.target.value)}/></div>
       <div className="conversation-list">{filtered.length?filtered.map(c=>{const lm=c.lastMessage;return <button key={c.id} className={'conversation '+(c.id===activeId?'active':'')} onClick={()=>setActiveId(c.id)}><Avatar name={conversationName(c)} avatarUrl={conversationAvatar(c)} online={c.isSelf?false:conversationOnline(c)}/><div className="conv-main"><div className="conv-line"><strong>{c.isSelf?'★ ':''}{conversationName(c)}</strong><time>{lm?fmtTime(lm.createdAt):''}</time></div><div className="conv-line"><span className="preview">{previewText(lm)}</span>{c.unreadCount>0&&<b className="badge">{c.unreadCount}</b>}</div></div></button>}):<div className="empty-side"><p>No conversations yet.</p><button className="secondary" onClick={()=>setNewChat(true)}>Start one</button></div>}</div>
     </aside>
@@ -471,7 +491,6 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     {drawer&&<ContextDrawer client={client} conversation={drawer.target==='conversation'?active:null} me={me} users={users} online={online} view={drawer.view} target={drawer.target} onView={view=>setDrawer(d=>d?{...d,view}:d)} onClose={()=>setDrawer(null)} onCopy={(text,label)=>void copyText(text,label)} onChangeAvatar={()=>avatarRef.current?.click()} onRenameGroup={renameActiveGroup} onAddMember={addActiveGroupMember} onRemoveMember={removeActiveGroupMember} onLeaveGroup={leaveActiveGroup}/>} 
     {contactsOpen&&<ContactsModal client={client} me={me} online={online} onClose={()=>setContactsOpen(false)} onDirect={u=>{setContactsOpen(false);void direct(u)}} onChanged={()=>void refresh()}/>}
     {newChat&&<NewChatModal users={users} current={me} onClose={()=>setNewChat(false)} onDirect={direct} onGroup={group} onSaved={saved}/>} 
-    {admin&&<AdminModal client={client} onClose={()=>setAdmin(false)} onCreated={()=>void refresh()}/>} 
     {commandOpen&&<CommandPalette client={client} me={me} users={users} conversations={conversations} onClose={()=>setCommandOpen(false)} onOpenConversation={setActiveId} onDirect={u=>void direct(u)} onSaved={()=>void saved()} onContacts={()=>setContactsOpen(true)}/>}
     <div className="toast-stack">{toasts.map(t=><div key={t.id} className={`toast ${t.kind}`}><span>{t.text}</span><button onClick={()=>setToasts(x=>x.filter(y=>y.id!==t.id))}>×</button></div>)}</div>
   </div>;

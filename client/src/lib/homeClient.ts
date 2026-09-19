@@ -15,6 +15,10 @@ export type InventoryLink = { messageId:number; sender:User; url:string; created
 export type ConversationInventory = { media:InventoryAttachment[]; files:InventoryAttachment[]; links:InventoryLink[] };
 export type LinkPreview = { url:string; title:string|null; description:string|null; imageUrl:string|null; siteName:string|null; hostname:string };
 export type MessageSearchResult = { message:Message };
+export type PrivacySettings = { dmPolicy:'everyone'|'contacts'|'nobody'; contactPolicy:'everyone'|'nobody'; presencePolicy:'everyone'|'contacts'|'nobody'; directoryVisible:boolean };
+export type PublicServiceConfig = { registrationEnabled:boolean; inviteRequired:boolean; maxUploadBytes:number };
+export type AdminUser = User & { disabled:boolean; createdAt:string };
+export type AdminOverview = { settings:PublicServiceConfig; storage:{fileCount:number;bytes:number;messageCount:number;userCount:number} };
 
 type LoginResponse = { token:string; user:User };
 
@@ -27,6 +31,9 @@ export class HomeClient {
     if (!r.ok) throw new Error('Invalid username or password');
     return r.json();
   }
+
+  static async publicConfig(baseUrl:string):Promise<PublicServiceConfig>{const r=await fetch(`${baseUrl}/api/public-config`);if(!r.ok)throw new Error('config_failed');return r.json();}
+  static async register(baseUrl:string, username:string, displayName:string, password:string, inviteCode=''):Promise<LoginResponse>{const r=await fetch(`${baseUrl}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,displayName,password,inviteCode})});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();}
 
   async api<T>(path:string, init:RequestInit={}):Promise<T> {
     const headers = new Headers(init.headers);
@@ -41,6 +48,13 @@ export class HomeClient {
   disconnect(){ this.socket?.disconnect(); }
   me(){ return this.api<User>('/api/me'); }
   users(){ return this.api<User[]>('/api/users'); }
+  privacy(){return this.api<PrivacySettings>('/api/me/privacy');}
+  setPrivacy(settings:Partial<PrivacySettings>){return this.api<PrivacySettings>('/api/me/privacy',{method:'PUT',body:JSON.stringify(settings)});}
+  adminOverview(){return this.api<AdminOverview>('/api/admin/overview');}
+  adminUsers(){return this.api<AdminUser[]>('/api/admin/users');}
+  updateAdminSettings(settings:{registrationEnabled?:boolean;inviteCode?:string;maxUploadBytes?:number}){return this.api<PublicServiceConfig>('/api/admin/settings',{method:'PUT',body:JSON.stringify(settings)});}
+  setUserDisabled(userId:number,disabled:boolean){return this.api<void>(`/api/admin/users/${userId}`,{method:'PATCH',body:JSON.stringify({disabled})});}
+  resetUserPassword(userId:number,password:string){return this.api<void>(`/api/admin/users/${userId}/reset-password`,{method:'POST',body:JSON.stringify({password})});}
   contacts(){ return this.api<User[]>('/api/contacts'); }
   contactRequests(){ return this.api<ContactRequests>('/api/contact-requests'); }
   directory(q=''){ return this.api<DirectoryUser[]>(`/api/directory?q=${encodeURIComponent(q)}`); }
