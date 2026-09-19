@@ -33,6 +33,12 @@ export interface FileView {
   url: string;
 }
 
+export interface MessageReceiptView {
+  userId: number;
+  deliveredAt: string | null;
+  readAt: string | null;
+}
+
 export interface MessageView {
   id: number;
   conversationId: number;
@@ -42,6 +48,7 @@ export interface MessageView {
   file: FileView | null;
   createdAt: string;
   editedAt: string | null;
+  receipts: MessageReceiptView[];
 }
 
 export interface InventoryAttachment {

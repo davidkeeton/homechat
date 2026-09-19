@@ -2,12 +2,18 @@
 
 A small self-hosted household messenger with a built-in web client. HomeChat is intentionally direct-message/group-chat first rather than a Teams/Discord-style workspace.
 
-## v0.4 features
+## v0.5 features
 
 - Direct messages and group chats
 - **HID**: permanent public hexadecimal identity such as `7A3F-19C2-B84D`
 - **Saved Messages**: a private chat with yourself for notes, links, images and files
 - Presence, typing indicators and unread counts
+- **Message history pagination**: older messages load as you scroll to the top without jumping the viewport
+- **Delivered/read state** on sent messages, including group read counts
+- Auto-growing message composer
+- Date separators and an unread-message divider
+- Reconnect/offline status feedback
+- Unified non-blocking error toasts instead of browser `alert()` dialogs
 - Drag/drop file and image uploads
 - Clipboard image paste
 - User avatars
@@ -37,7 +43,7 @@ Health check:
 curl http://localhost:8092/health
 ```
 
-Existing v0.1-v0.3 databases are upgraded automatically on startup. Existing users are assigned an HID the first time v0.4 starts.
+Existing databases are upgraded automatically on startup. Existing users without an HID are assigned one automatically.
 
 ## First account
 

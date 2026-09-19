@@ -22,7 +22,7 @@ const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.4.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.5.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -173,7 +173,7 @@ async function fetchLinkPreview(raw:string): Promise<LinkPreview> {
   const url=await safePreviewUrl(raw);
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),4500);
   try {
-    const r=await fetch(url,{signal:controller.signal,redirect:'error',headers:{'User-Agent':'HomeChat/0.4 link-preview','Accept':'text/html,application/xhtml+xml'}});
+    const r=await fetch(url,{signal:controller.signal,redirect:'error',headers:{'User-Agent':'HomeChat/0.5 link-preview','Accept':'text/html,application/xhtml+xml'}});
     if(!r.ok) throw new Error('fetch_failed');
     const type=r.headers.get('content-type')||''; if(!/text\/html|application\/xhtml\+xml/i.test(type)) throw new Error('not_html');
     const html=await readLimitedHtml(r);

@@ -225,7 +225,10 @@ function fileForMessage(fileId: number | null): any | null {
 export function messageById(id: number): MessageView | null {
   const r = db.prepare(`SELECT m.*, u.hid,u.username,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(id) as any;
   if (!r) return null;
-  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:r.body ?? null, file:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null };
+  const receipts=(db.prepare('SELECT user_id,delivered_at,read_at FROM message_receipts WHERE message_id=? ORDER BY user_id').all(id) as any[]).map(x=>({
+    userId:Number(x.user_id), deliveredAt:x.delivered_at?String(x.delivered_at):null, readAt:x.read_at?String(x.read_at):null
+  }));
+  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:r.body ?? null, file:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null, receipts };
 }
 
 export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null): MessageView {
@@ -248,8 +251,12 @@ export function history(conversationId: number, beforeId: number | null, limit =
 }
 
 export function markReceipt(messageId: number, userId: number, kind: 'delivered'|'read'): void {
-  const col = kind === 'read' ? 'read_at' : 'delivered_at';
-  db.prepare(`UPDATE message_receipts SET ${col}=? WHERE message_id=? AND user_id=?`).run(new Date().toISOString(),messageId,userId);
+  const now=new Date().toISOString();
+  if(kind==='read'){
+    db.prepare('UPDATE message_receipts SET delivered_at=COALESCE(delivered_at,?), read_at=? WHERE message_id=? AND user_id=?').run(now,now,messageId,userId);
+  } else {
+    db.prepare('UPDATE message_receipts SET delivered_at=COALESCE(delivered_at,?) WHERE message_id=? AND user_id=?').run(now,messageId,userId);
+  }
 }
 
 export function insertFile(ownerId:number, originalName:string, storedName:string, mimeType:string, size:number): number {

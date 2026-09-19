@@ -2,7 +2,8 @@ import { io, type Socket } from 'socket.io-client';
 
 export type User = { id:number; hid:string; username:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
 export type FileView = { id:number; name:string; mimeType:string; size:number; url:string };
-export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null };
+export type MessageReceipt = { userId:number; deliveredAt:string|null; readAt:string|null };
+export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; receipts:MessageReceipt[] };
 export type Conversation = { id:number; type:'direct'|'group'; isSelf:boolean; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
 export type ConversationInventory = { media:any[]; files:any[]; links:any[] };
 
