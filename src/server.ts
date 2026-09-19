@@ -17,6 +17,7 @@ import {
 const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
+const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
 app.get('/health', (_req,res)=>res.json({ok:true,version:'0.1.0'}));
 
 app.post('/api/setup', (req,res)=>{
@@ -94,6 +95,10 @@ app.get('/api/files/:id',requireAuth,(req,res)=>{
   res.type(f.mime_type); res.setHeader('Content-Disposition',`inline; filename*=UTF-8''${encodeURIComponent(f.original_name)}`); res.sendFile(path.join(config.uploadDir,f.stored_name));
 });
 
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+  app.get('/', (_req,res)=>res.sendFile(path.join(publicDir,'index.html')));
+}
 const server=http.createServer(app);
 const io=new SocketServer(server,{cors:{origin:true,credentials:true}});
 const online=new Map<number,number>();
