@@ -77,7 +77,9 @@ function Messenger({session,onLogout}:{session:Session;onLogout:()=>void}){
 
   useEffect(()=>{ refresh().catch(()=>onLogout()); const socket=client.connect(); socket.on('presence:snapshot',(p:{userIds:number[]})=>setOnline(new Set(p.userIds))); socket.on('presence:update',(p:{userId:number;online:boolean})=>setOnline(s=>{const n=new Set(s);p.online?n.add(p.userId):n.delete(p.userId);return n;})); socket.on('typing:update',(p:{conversationId:number;userId:number;typing:boolean})=>setTyping(t=>{const n={...t}; const set=new Set(n[p.conversationId]||[]);p.typing?set.add(p.userId):set.delete(p.userId);n[p.conversationId]=set;return n;})); socket.on('message:new',(m:Message)=>{setMessages(all=>({...all,[m.conversationId]:[...(all[m.conversationId]||[]).filter(x=>x.id!==m.id),m]})); if(m.sender.id!==session.user.id){client.receipt(m.id,'delivered'); if(m.conversationId===activeId) client.receipt(m.id,'read');} refresh();}); return()=>client.disconnect();},[client]);
   useEffect(()=>{if(activeId)loadMessages(activeId);},[activeId]);
-  useEffect(()=>bottomRef.current?.scrollIntoView({behavior:'smooth'}),[activeId,messages]);
+  useEffect(() => {
+  bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+}, [activeId, messages]);
 
   const filtered=conversations.filter(c=>conversationName(c).toLowerCase().includes(search.toLowerCase()));
   function conversationName(c:Conversation){ if(c.type==='group')return c.name||'Group'; return c.members.find(m=>m.id!==session.user.id)?.displayName||'Conversation'; }
