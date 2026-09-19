@@ -2,7 +2,15 @@
 
 A small self-hosted household messenger with a built-in web client. HomeChat is intentionally direct-message/group-chat first rather than a Teams/Discord-style workspace.
 
-## v0.5 features
+### Details & identity
+- Reusable right-side Details / Media / Files / Links flyout
+- HID moved into contact/profile details with one-click copy
+- My Details panel with username, role and avatar change
+- Contact details from the chat header
+- Group details with rename, member list, add/remove member and leave-group controls
+- Flyout closes on Escape, conversation change, or when returning to the chat
+
+## v0.6 features
 
 - Direct messages and group chats
 - **HID**: permanent public hexadecimal identity such as `7A3F-19C2-B84D`

@@ -20,6 +20,9 @@ export class HomeClient {
   messages(conversationId:number,before?:number){return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`);}
   inventory(conversationId:number){return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`);}
   savedMessages(){return this.api<{id:number}>('/api/conversations/self',{method:'POST'});}
+  renameGroup(conversationId:number,name:string){return this.api<void>(`/api/conversations/${conversationId}/group`,{method:'PATCH',body:JSON.stringify({name})});}
+  addGroupMember(conversationId:number,userId:number){return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})});}
+  removeGroupMember(conversationId:number,userId:number){return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'});}
   send(conversationId:number,body?:string,fileId?:number){return new Promise((resolve,reject)=>this.socket?.emit('message:send',{conversationId,body,fileId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed'))));}
   typing(conversationId:number,typing:boolean){this.socket?.emit('typing:set',{conversationId,typing});}
   receipt(messageId:number,kind:'delivered'|'read'){this.socket?.emit('receipt:set',{messageId,kind});}

@@ -42,6 +42,9 @@ export class HomeClient {
   savedMessages(){ return this.api<{id:number}>('/api/conversations/self',{method:'POST'}); }
   createDirect(userId:number){ return this.api<{id:number}>('/api/conversations/direct',{method:'POST',body:JSON.stringify({userId})}); }
   createGroup(name:string,memberIds:number[]){ return this.api<{id:number}>('/api/conversations/group',{method:'POST',body:JSON.stringify({name,memberIds})}); }
+  renameGroup(conversationId:number,name:string){ return this.api<void>(`/api/conversations/${conversationId}/group`,{method:'PATCH',body:JSON.stringify({name})}); }
+  addGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})}); }
+  removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
   createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
   send(conversationId:number,body?:string,fileId?:number){ return new Promise<Message>((resolve,reject)=>this.socket?.emit('message:send',{conversationId,body,fileId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')))); }
   typing(conversationId:number,typing:boolean){ this.socket?.emit('typing:set',{conversationId,typing}); }
