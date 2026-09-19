@@ -3,6 +3,7 @@ export type MessageType = 'text' | 'image' | 'file';
 
 export interface PublicUser {
   id: number;
+  hid: string;
   username: string;
   displayName: string;
   avatarUrl: string | null;
@@ -16,6 +17,7 @@ export interface AuthUser extends PublicUser {
 export interface ConversationSummary {
   id: number;
   type: ConversationType;
+  isSelf: boolean;
   name: string | null;
   avatarUrl: string | null;
   members: PublicUser[];
@@ -40,4 +42,33 @@ export interface MessageView {
   file: FileView | null;
   createdAt: string;
   editedAt: string | null;
+}
+
+export interface InventoryAttachment {
+  messageId: number;
+  sender: PublicUser;
+  file: FileView;
+  createdAt: string;
+}
+
+export interface InventoryLink {
+  messageId: number;
+  sender: PublicUser;
+  url: string;
+  createdAt: string;
+}
+
+export interface ConversationInventory {
+  media: InventoryAttachment[];
+  files: InventoryAttachment[];
+  links: InventoryLink[];
+}
+
+export interface LinkPreview {
+  url: string;
+  title: string | null;
+  description: string | null;
+  imageUrl: string | null;
+  siteName: string | null;
+  hostname: string;
 }

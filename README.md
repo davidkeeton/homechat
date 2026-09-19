@@ -1,10 +1,22 @@
 # HomeChat
 
-A small self-hosted household messenger backend: direct messages, group chats, presence, typing, read/delivery receipts, file/image uploads, SQLite persistence, and Socket.IO realtime delivery.
+A small self-hosted household messenger with a built-in web client. HomeChat is intentionally direct-message/group-chat first rather than a Teams/Discord-style workspace.
 
-## Why this shape
+## v0.4 features
 
-The project intentionally uses a small Kandan-like stack (Node/TypeScript/Express/Socket.IO/SQLite) and borrows local-first architectural ideas from LOAM while remaining original MIT-licensed code.
+- Direct messages and group chats
+- **HID**: permanent public hexadecimal identity such as `7A3F-19C2-B84D`
+- **Saved Messages**: a private chat with yourself for notes, links, images and files
+- Presence, typing indicators and unread counts
+- Drag/drop file and image uploads
+- Clipboard image paste
+- User avatars
+- Inline images, video and audio playback
+- **Voice snippets** recorded in the browser (requires HTTPS or localhost for microphone access in modern browsers)
+- Per-conversation **Media / Files / Links** inventory
+- Clickable hyperlinks and cached Open Graph/title link previews
+- SQLite persistence and Socket.IO realtime delivery
+- Docker deployment
 
 ## Run with Docker
 
@@ -13,13 +25,19 @@ mkdir -p /home/dkeeton/docker/appdata/homechat
 docker compose up -d --build
 ```
 
-Server: `http://SERVER-IP:8092`
+Server and web client:
+
+```text
+http://SERVER-IP:8092
+```
 
 Health check:
 
 ```bash
 curl http://localhost:8092/health
 ```
+
+Existing v0.1-v0.3 databases are upgraded automatically on startup. Existing users are assigned an HID the first time v0.4 starts.
 
 ## First account
 
@@ -31,9 +49,9 @@ curl -X POST http://localhost:8092/api/setup \
   -d '{"username":"dave","displayName":"Dave","password":"change-this-password"}'
 ```
 
-Save the returned token. Subsequent users are created by the admin using `POST /api/users`.
+The response contains the user's generated HID and session token.
 
-## REST API
+## Notable REST API
 
 - `POST /api/setup` first admin only
 - `POST /api/auth/login`
@@ -42,80 +60,33 @@ Save the returned token. Subsequent users are created by the admin using `POST /
 - `GET /api/users`
 - `POST /api/users` admin
 - `GET /api/conversations`
+- `POST /api/conversations/self` Saved Messages
 - `POST /api/conversations/direct`
 - `POST /api/conversations/group`
-- `PATCH /api/conversations/:id/group` rename group
-- `POST /api/conversations/:id/members` add member
-- `DELETE /api/conversations/:id/members/:userId` remove member
 - `GET /api/conversations/:id/messages`
-- `POST /api/files` multipart field `file`
+- `GET /api/conversations/:id/inventory`
+- `POST /api/files`
 - `GET /api/files/:id`
+- `GET /api/link-preview?url=...`
 
-## Socket.IO events
+## Link previews
 
-Client → server:
+Link preview requests are fetched server-side and cached in SQLite. HomeChat only accepts HTTP/HTTPS destinations on standard web ports and rejects loopback, private, link-local and `.local` destinations to reduce SSRF risk.
 
-- `conversation:join`
-- `message:send`
-- `typing:set`
-- `receipt:set`
+## Voice snippets
 
-Server → client:
+The web client uses the browser `MediaRecorder` API. Browsers normally allow microphone capture only in a secure context, so recording works over HTTPS or when accessing HomeChat from `localhost`. Uploaded audio files work over ordinary HTTP as well.
 
-- `message:new`
-- `typing:update`
-- `receipt:update`
-- `presence:update`
-- `presence:snapshot`
+## Data
 
+The Compose file persists the database and uploads at:
 
-## v0.3 client polish
+```text
+/home/dkeeton/docker/appdata/homechat
+```
 
-The bundled web client now includes:
+Back up that directory to preserve users, messages and files.
 
-* Clipboard image paste: copy a screenshot/image and press Ctrl+V in the composer.
-* Attachment preview before sending for pasted, picked, and dropped files.
-* Improved deterministic avatars plus optional uploaded profile pictures (click your own avatar).
-* Browser notifications, notification sound, and unread count in the page title.
-* Image lightbox with download action.
-* Richer file cards with type and size.
-* Source maps in client production builds to make early debugging less painful.
+## Current scope
 
-Browser notifications generally require a secure context (HTTPS) in Chromium-based browsers. The rest of HomeChat continues to work over plain LAN HTTP; native desktop packaging can provide notifications later without that browser restriction.
-
-## Client integration
-
-`sdk/homeClient.ts` is the boundary between the UI and the backend. The Retrogram-style React/Electron UI should call this adapter rather than importing Socket.IO throughout the component tree.
-
-## Current limitations
-
-- No end-to-end encryption.
-- No voice/video.
-- No mobile push notifications.
-- Group permissions are intentionally simple in v0.1: any current member can rename/add/remove members. Add group-owner/admin roles before Internet exposure.
-- File downloads are limited to the uploader or a member of a conversation referencing the file.
-- Intended for LAN/VPN use in this version.
-
-## v0.2 browser client
-
-The Docker image now builds and serves a React client from the same HomeChat service. After rebuilding, browse to:
-
-    http://SERVER-IP:8092
-
-Implemented in the first client pass:
-
-- Username/password login and persistent browser session
-- Direct conversations and group creation
-- Conversation list and unread badges
-- Realtime messages over Socket.IO
-- Online/offline presence
-- Typing indicators
-- Drag-and-drop / picker file uploads
-- Inline authenticated image previews
-- Admin "add user" dialog
-- Responsive WhatsApp/ICQ-style two-pane interface
-
-Rebuild after pulling the v0.2 files:
-
-    docker compose down
-    docker compose up -d --build
+HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end encryption, Internet-scale abuse controls, native mobile push notifications, or voice/video calling.

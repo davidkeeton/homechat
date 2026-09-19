@@ -1,9 +1,13 @@
 import { io, type Socket } from 'socket.io-client';
 
-export type User = { id:number; username:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
+export type User = { id:number; hid:string; username:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
 export type FileView = { id:number; name:string; mimeType:string; size:number; url:string };
 export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null };
-export type Conversation = { id:number; type:'direct'|'group'; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
+export type Conversation = { id:number; type:'direct'|'group'; isSelf:boolean; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
+export type InventoryAttachment = { messageId:number; sender:User; file:FileView; createdAt:string };
+export type InventoryLink = { messageId:number; sender:User; url:string; createdAt:string };
+export type ConversationInventory = { media:InventoryAttachment[]; files:InventoryAttachment[]; links:InventoryLink[] };
+export type LinkPreview = { url:string; title:string|null; description:string|null; imageUrl:string|null; siteName:string|null; hostname:string };
 
 type LoginResponse = { token:string; user:User };
 
@@ -32,6 +36,9 @@ export class HomeClient {
   users(){ return this.api<User[]>('/api/users'); }
   conversations(){ return this.api<Conversation[]>('/api/conversations'); }
   messages(conversationId:number,before?:number){ return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`); }
+  inventory(conversationId:number){ return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`); }
+  linkPreview(url:string){ return this.api<LinkPreview>(`/api/link-preview?url=${encodeURIComponent(url)}`); }
+  savedMessages(){ return this.api<{id:number}>('/api/conversations/self',{method:'POST'}); }
   createDirect(userId:number){ return this.api<{id:number}>('/api/conversations/direct',{method:'POST',body:JSON.stringify({userId})}); }
   createGroup(name:string,memberIds:number[]){ return this.api<{id:number}>('/api/conversations/group',{method:'POST',body:JSON.stringify({name,memberIds})}); }
   createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
