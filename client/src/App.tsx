@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   HomeClient,
   type Conversation,
+  type ContactRequests,
   type ConversationInventory,
+  type DirectoryUser,
   type FileView,
   type InventoryAttachment,
   type LinkPreview,
@@ -16,7 +18,7 @@ const URL_RE = /https?:\/\/[^\s<>'"`]+/gi;
 type Session = { token:string; user:User };
 type Lightbox = { url:string; name:string } | null;
 type InventoryTab = 'media'|'files'|'links';
-type UiMessage = Message & { sendState?:'sending'|'failed'; temp?:boolean; localFileUrl?:string; retry?:{body?:string;fileId?:number;clientNonce:string;file?:File} };
+type UiMessage = Message & { sendState?:'sending'|'failed'; temp?:boolean; localFileUrl?:string; retry?:{body?:string;fileId?:number;clientNonce:string;file?:File;replyToId?:number} };
 const fileUrlCache=new Map<string,string>();
 const fileUrlPending=new Map<string,Promise<string>>();
 
@@ -27,7 +29,7 @@ function fmtBytes(bytes:number){ if(bytes<1024)return `${bytes} B`; if(bytes<102
 function avatarTone(name:string){ let h=0; for(const ch of name) h=(h*31+ch.charCodeAt(0))>>>0; return h%8; }
 function fileGlyph(name:string,mime=''){ const ext=name.split('.').pop()?.toLowerCase(); if(mime.includes('pdf')||ext==='pdf')return 'PDF'; if(/zip|rar|7z|tar|gzip/.test(mime)||['zip','rar','7z','tar','gz'].includes(ext||''))return 'ZIP'; if(mime.startsWith('audio/'))return '♪'; if(mime.startsWith('video/'))return '▶'; if(/word|document/.test(mime)||['doc','docx','odt'].includes(ext||''))return 'DOC'; if(/sheet|excel/.test(mime)||['xls','xlsx','csv'].includes(ext||''))return 'XLS'; return 'FILE'; }
 function extractUrls(text:string|null|undefined){ if(!text)return []; return [...text.matchAll(URL_RE)].map(m=>m[0].replace(/[),.;!?]+$/g,'')); }
-function previewText(m:Message|null){ if(!m)return 'No messages yet'; if(m.file?.mimeType.startsWith('audio/'))return '🎤 Voice message'; if(m.file?.mimeType.startsWith('video/'))return '🎬 Video'; if(m.type==='image')return '📷 Photo'; if(m.type==='file')return `📎 ${m.file?.name||'File'}`; return m.body||'Message'; }
+function previewText(m:Message|null){ if(!m)return 'No messages yet'; if(m.deletedAt)return 'Message deleted'; if(m.file?.mimeType.startsWith('audio/'))return '🎤 Voice message'; if(m.file?.mimeType.startsWith('video/'))return '🎬 Video'; if(m.type==='image')return '📷 Photo'; if(m.type==='file')return `📎 ${m.file?.name||'File'}`; return m.body||'Message'; }
 
 function Avatar({name,online=false,avatarUrl,size='normal',onClick}:{name:string;online?:boolean;avatarUrl?:string|null;size?:'normal'|'large';onClick?:()=>void}){
   const content=avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{initials(name)}</span>;
@@ -82,12 +84,18 @@ function LinkPreviewCard({client,url,compact=false}:{client:HomeClient;url:strin
   </a>;
 }
 
-function MessageBody({client,body}:{client:HomeClient;body:string}){
+function MessageBody({client,body,me}:{client:HomeClient;body:string;me:User}){
   const urls=extractUrls(body); const pieces:React.ReactNode[]=[]; let last=0;
-  const re=new RegExp(URL_RE.source,'gi'); let match:RegExpExecArray|null;
-  while((match=re.exec(body))){const raw=match[0];const clean=raw.replace(/[),.;!?]+$/g,'');const trailing=raw.slice(clean.length);if(match.index>last)pieces.push(body.slice(last,match.index));pieces.push(<a key={`${match.index}-${clean}`} href={clean} target="_blank" rel="noreferrer noopener" className="message-link">{clean}</a>);if(trailing)pieces.push(trailing);last=match.index+raw.length;}
+  const tokenRe=/(https?:\/\/[^\s<>'"`]+)|(@[A-Za-z0-9_.-]+)/gi; let match:RegExpExecArray|null;
+  while((match=tokenRe.exec(body))){const raw=match[0];if(match.index>last)pieces.push(body.slice(last,match.index));if(raw.startsWith('@')){const mine=raw.slice(1).toLowerCase()===me.username.toLowerCase();pieces.push(<span key={`${match.index}-${raw}`} className={`mention ${mine?'mine':''}`}>{raw}</span>);}else{const clean=raw.replace(/[),.;!?]+$/g,'');const trailing=raw.slice(clean.length);pieces.push(<a key={`${match.index}-${clean}`} href={clean} target="_blank" rel="noreferrer noopener" className="message-link">{clean}</a>);if(trailing)pieces.push(trailing);}last=match.index+raw.length;}
   if(last<body.length)pieces.push(body.slice(last));
   return <><div className="body">{pieces.length?pieces:body}</div>{urls[0]&&<LinkPreviewCard client={client} url={urls[0]}/>}</>;
+}
+
+function ReplyQuote({message}:{message:UiMessage}){
+  const r=message.replyTo;if(!r)return null;
+  const text=r.deletedAt?'Message deleted':r.body||(r.file?`📎 ${r.file.name}`:'Message');
+  return <div className="reply-quote"><strong>{r.sender.displayName}</strong><span>{text}</span></div>;
 }
 
 function InventoryMediaItem({client,item}:{client:HomeClient;item:InventoryAttachment}){
@@ -147,6 +155,20 @@ function NewChatModal({users,current,onClose,onDirect,onGroup,onSaved}:{users:Us
   </div></div>;
 }
 
+function ContactsModal({client,me,online,onClose,onDirect,onChanged}:{client:HomeClient;me:User;online:Set<number>;onClose:()=>void;onDirect:(u:User)=>void;onChanged:()=>void}){
+  const [contacts,setContacts]=useState<User[]>([]);const [requests,setRequests]=useState<ContactRequests>({incoming:[],outgoing:[]});const [directory,setDirectory]=useState<DirectoryUser[]>([]);const [q,setQ]=useState('');const [busy,setBusy]=useState(false);
+  async function reload(search=q){const [c,r,d]=await Promise.all([client.contacts(),client.contactRequests(),client.directory(search)]);setContacts(c);setRequests(r);setDirectory(d);}
+  useEffect(()=>{void reload('');},[]);
+  useEffect(()=>{const id=window.setTimeout(()=>void client.directory(q).then(setDirectory).catch(()=>{}),220);return()=>window.clearTimeout(id);},[q]);
+  async function action(fn:()=>Promise<unknown>){setBusy(true);try{await fn();await reload();onChanged();}finally{setBusy(false);}}
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal contacts-modal" onMouseDown={e=>e.stopPropagation()}>
+    <div className="modal-head"><h3>Contacts</h3><button onClick={onClose}>×</button></div>
+    {requests.incoming.length>0&&<section className="contact-section"><h4>Requests</h4>{requests.incoming.map(r=><div className="contact-row" key={r.id}><Avatar name={r.sender.displayName} avatarUrl={r.sender.avatarUrl} online={online.has(r.sender.id)}/><div><strong>{r.sender.displayName}</strong><small>@{r.sender.username} · {r.sender.hid}</small></div><button disabled={busy} onClick={()=>void action(()=>client.acceptContactRequest(r.id))}>Accept</button><button disabled={busy} onClick={()=>void action(()=>client.declineContactRequest(r.id))}>Decline</button></div>)}</section>}
+    <section className="contact-section"><h4>My contacts</h4>{contacts.length?contacts.map(u=><div className="contact-row" key={u.id}><Avatar name={u.displayName} avatarUrl={u.avatarUrl} online={online.has(u.id)}/><div><strong>{u.displayName}</strong><small>@{u.username} · {u.hid}</small></div><button onClick={()=>onDirect(u)}>Message</button><button className="quiet-danger" disabled={busy} onClick={()=>void action(()=>client.removeContact(u.id))}>Remove</button></div>):<div className="inventory-empty">No contacts yet.</div>}</section>
+    <section className="contact-section"><h4>User directory</h4><input className="directory-search" placeholder="Search name, username or HID" value={q} onChange={e=>setQ(e.target.value)}/><div className="directory-list">{directory.filter(u=>u.id!==me.id).map(u=><div className="contact-row" key={u.id}><Avatar name={u.displayName} avatarUrl={u.avatarUrl} online={online.has(u.id)}/><div><strong>{u.displayName}</strong><small>@{u.username} · {u.hid}</small></div>{u.relationship==='contact'?<button onClick={()=>onDirect(u)}>Message</button>:u.relationship==='outgoing'?<span className="relationship-label">Requested</span>:u.relationship==='incoming'?<span className="relationship-label">Request waiting</span>:<button disabled={busy} onClick={()=>void action(()=>client.requestContact(u.id))}>Add</button>}</div>)}</div></section>
+  </div></div>;
+}
+
 function AdminModal({client,onClose,onCreated}:{client:HomeClient;onClose:()=>void;onCreated:()=>void}){
   const [username,setUsername]=useState(''); const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [error,setError]=useState('');
   async function create(){try{await client.createUser(username,displayName,password);onCreated();onClose();}catch(e:any){setError(e.message||'Failed');}}
@@ -185,7 +207,10 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const [text,setText]=useState('');
   const [newChat,setNewChat]=useState(false);
   const [admin,setAdmin]=useState(false);
+  const [contactsOpen,setContactsOpen]=useState(false);
   const [search,setSearch]=useState('');
+  const [replyingTo,setReplyingTo]=useState<UiMessage|null>(null);
+  const [editing,setEditing]=useState<UiMessage|null>(null);
   const [uploading,setUploading]=useState(false);
   const [pendingFile,setPendingFile]=useState<File|null>(null);
   const [pendingUrl,setPendingUrl]=useState<string>('');
@@ -225,7 +250,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   function dayKey(ts:string){const d=new Date(ts);return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;}
   function dayLabel(ts:string){const d=new Date(ts);const now=new Date();const yesterday=new Date(now);yesterday.setDate(now.getDate()-1);if(dayKey(ts)===dayKey(now.toISOString()))return 'Today';if(dayKey(ts)===dayKey(yesterday.toISOString()))return 'Yesterday';return d.toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',year:d.getFullYear()===now.getFullYear()?undefined:'numeric'});}
 
-  useEffect(()=>{activeIdRef.current=activeId;setDrawer(null);},[activeId]);
+  useEffect(()=>{activeIdRef.current=activeId;setDrawer(null);setReplyingTo(null);setEditing(null);setText('');},[activeId]);
   useEffect(()=>{function key(e:KeyboardEvent){if(e.key==='Escape')setDrawer(null);}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
   useEffect(()=>{conversationsRef.current=conversations;const unread=conversations.reduce((n,c)=>n+c.unreadCount,0);document.title=unread?`(${unread}) HomeChat`:'HomeChat';},[conversations]);
   useEffect(()=>()=>{document.title='HomeChat';},[]);
@@ -307,6 +332,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     socket.on('presence:update',(p:{userId:number;online:boolean})=>setOnline(s=>{const n=new Set(s);p.online?n.add(p.userId):n.delete(p.userId);return n;}));
     socket.on('typing:update',(p:{conversationId:number;userId:number;typing:boolean})=>setTyping(t=>{const n={...t};const set=new Set(n[p.conversationId]||[]);p.typing?set.add(p.userId):set.delete(p.userId);n[p.conversationId]=set;return n;}));
     socket.on('receipt:update',(p:{messageId:number;userId:number;kind:'delivered'|'read'})=>setMessages(all=>{const next={...all};for(const [cid,list] of Object.entries(next)){if(!list.some(m=>m.id===p.messageId))continue;next[Number(cid)]=list.map(m=>{if(m.id!==p.messageId)return m;const now=new Date().toISOString();const receipts=[...(m.receipts||[])];const i=receipts.findIndex(r=>r.userId===p.userId);const current=i>=0?receipts[i]:{userId:p.userId,deliveredAt:null,readAt:null};const updated=p.kind==='read'?{...current,deliveredAt:current.deliveredAt||now,readAt:now}:{...current,deliveredAt:now};if(i>=0)receipts[i]=updated;else receipts.push(updated);return {...m,receipts};});break;}return next;}));
+    socket.on('message:update',(m:Message)=>setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?m:x)})));
     socket.on('reaction:update',(p:{messageId:number;reactions:Message['reactions']})=>setMessages(all=>{const next={...all};for(const [cid,list] of Object.entries(next)){if(list.some(m=>m.id===p.messageId)){next[Number(cid)]=list.map(m=>m.id===p.messageId?{...m,reactions:p.reactions}:m);break;}}return next;}));
     socket.on('message:new',(m:Message)=>{
       const shouldFollow=m.conversationId===activeIdRef.current&&isNearBottom();
@@ -324,24 +350,29 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const filtered=conversations.filter(c=>conversationName(c).toLowerCase().includes(search.toLowerCase()));
 
   function queueFile(file:File){if(file.size>100*1024*1024){toast('File is larger than 100 MB.');return;}setPendingFile(file);}
-  async function deliverOptimistic(tempId:number,cid:number,body:string,file:File|null,clientNonce:string,fileId?:number){
+  async function deliverOptimistic(tempId:number,cid:number,body:string,file:File|null,clientNonce:string,fileId?:number,replyToId?:number){
     let resolvedFileId=fileId;
     try{
-      if(file&&!resolvedFileId){setUploading(true);const uploaded=await client.upload(file);resolvedFileId=uploaded.id;setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId?{...m,retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file}}:m)}));}
-      const sent=await client.send(cid,body||undefined,resolvedFileId,clientNonce);
+      if(file&&!resolvedFileId){setUploading(true);const uploaded=await client.upload(file);resolvedFileId=uploaded.id;setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId?{...m,retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file,replyToId}}:m)}));}
+      const sent=await client.send(cid,body||undefined,resolvedFileId,clientNonce,replyToId);
       setMessages(all=>{const list=all[cid]||[];const local=list.find(m=>m.id===tempId||m.clientNonce===clientNonce);if(local?.localFileUrl)URL.revokeObjectURL(local.localFileUrl);return {...all,[cid]:[...list.filter(m=>m.id!==tempId&&m.clientNonce!==clientNonce&&m.id!==sent.id),sent]};});
-    }catch(e){setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId||m.clientNonce===clientNonce?{...m,sendState:'failed',retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file:file||undefined}}:m)}));toast(errorText(e,'Message could not be sent.'));}
+    }catch(e){setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId||m.clientNonce===clientNonce?{...m,sendState:'failed',retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file:file||undefined,replyToId}}:m)}));toast(errorText(e,'Message could not be sent.'));}
     finally{setUploading(false);if(fileRef.current)fileRef.current.value='';}
   }
   async function send(){
-    const body=text.trim();if(!activeId||(!body&&!pendingFile))return;
+    const body=text.trim();if(!activeId)return;
+    if(editing){if(!body)return;if(connection!=='connected'){toast('HomeChat is offline. Wait for it to reconnect.');return;}try{const updated=await client.editMessage(editing.id,body);setMessages(all=>({...all,[activeId]:(all[activeId]||[]).map(m=>m.id===updated.id?updated:m)}));setEditing(null);setText('');}catch(e){toast(errorText(e,'Message could not be edited.'));}return;}
+    if(!body&&!pendingFile)return;
     if(connection!=='connected'){toast('HomeChat is offline. Wait for it to reconnect.');return;}
-    const cid=activeId;const file=pendingFile;const clientNonce=crypto.randomUUID();const tempId=tempIdRef.current--;const localFileUrl=file?URL.createObjectURL(file):undefined;
-    const optimistic:UiMessage={id:tempId,conversationId:cid,sender:me,type:file?(file.type.startsWith('image/')?'image':'file'):'text',body:body||null,file:file?{id:tempId,name:file.name,mimeType:file.type||'application/octet-stream',size:file.size,url:''}:null,createdAt:new Date().toISOString(),editedAt:null,receipts:[],reactions:[],clientNonce,sendState:'sending',temp:true,localFileUrl,retry:{body:body||undefined,clientNonce,file:file||undefined}};
-    setMessages(all=>({...all,[cid]:[...(all[cid]||[]),optimistic]}));setText('');setPendingFile(null);client.typing(cid,false);scrollBottom('smooth');
-    void deliverOptimistic(tempId,cid,body,file,clientNonce);
+    const cid=activeId;const file=pendingFile;const clientNonce=crypto.randomUUID();const tempId=tempIdRef.current--;const localFileUrl=file?URL.createObjectURL(file):undefined;const replyToId=replyingTo?.id;
+    const optimistic:UiMessage={id:tempId,conversationId:cid,sender:me,type:file?(file.type.startsWith('image/')?'image':'file'):'text',body:body||null,file:file?{id:tempId,name:file.name,mimeType:file.type||'application/octet-stream',size:file.size,url:''}:null,createdAt:new Date().toISOString(),editedAt:null,deletedAt:null,replyTo:replyingTo?{id:replyingTo.id,sender:replyingTo.sender,type:replyingTo.type,body:replyingTo.body,file:replyingTo.file,deletedAt:replyingTo.deletedAt}:null,receipts:[],reactions:[],clientNonce,sendState:'sending',temp:true,localFileUrl,retry:{body:body||undefined,clientNonce,file:file||undefined,replyToId}};
+    setMessages(all=>({...all,[cid]:[...(all[cid]||[]),optimistic]}));setText('');setPendingFile(null);setReplyingTo(null);client.typing(cid,false);scrollBottom('smooth');
+    void deliverOptimistic(tempId,cid,body,file,clientNonce,undefined,replyToId);
   }
-  function retryMessage(m:UiMessage){if(!m.retry||connection!=='connected')return;setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?{...x,sendState:'sending'}:x)}));void deliverOptimistic(m.id,m.conversationId,m.retry.body||'',m.retry.file||null,m.retry.clientNonce,m.retry.fileId);}
+  function retryMessage(m:UiMessage){if(!m.retry||connection!=='connected')return;setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?{...x,sendState:'sending'}:x)}));void deliverOptimistic(m.id,m.conversationId,m.retry.body||'',m.retry.file||null,m.retry.clientNonce,m.retry.fileId,m.retry.replyToId);}
+  function beginEdit(m:UiMessage){if(!m.body||m.sender.id!==me.id||m.deletedAt)return;setEditing(m);setReplyingTo(null);setText(m.body);requestAnimationFrame(()=>composerRef.current?.focus());}
+  function beginReply(m:UiMessage){if(m.deletedAt)return;setReplyingTo(m);setEditing(null);requestAnimationFrame(()=>composerRef.current?.focus());}
+  async function removeMessage(m:UiMessage){if(m.sender.id!==me.id||m.id<=0)return;try{const updated=await client.deleteMessage(m.id);setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?updated:x)}));toast('Message deleted.','info');}catch(e){toast(errorText(e,'Message could not be deleted.'));}}
   async function toggleReaction(m:UiMessage,emoji:string){if(m.id<=0)return;try{const reactions=await client.reaction(m.id,emoji);setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?{...x,reactions}:x)}));setReactionPicker(null);}catch(e){toast(errorText(e,'Could not update reaction.'));}}
   function onText(v:string){setText(v);if(!activeId||connection!=='connected')return;client.typing(activeId,true);window.clearTimeout(typingTimer.current);typingTimer.current=window.setTimeout(()=>client.typing(activeId,false),1200);}
   function onPaste(e:React.ClipboardEvent<HTMLTextAreaElement>){const item=[...e.clipboardData.items].find(x=>x.type.startsWith('image/'));if(!item)return;const blob=item.getAsFile();if(!blob)return;e.preventDefault();const ext=blob.type.split('/')[1]?.replace('jpeg','jpg')||'png';queueFile(new File([blob],`clipboard-${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`,{type:blob.type}));}
@@ -383,11 +414,11 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
       const grouped=!dateBreak&&!unreadBreak&&!!prev&&sameGroup(prev,m);
       const groupEnd=!next||unreadId===next.id||dayKey(next.createdAt)!==dk||!sameGroup(m,next);
       nodes.push(<div className={'message-row '+(m.sender.id===me.id?'mine':'theirs')+(m.sendState==='failed'?' failed-message':'')+(grouped?' grouped':'')+(groupEnd?' group-end':'')} key={m.id}>
-        <div className="message-actions">{m.id>0&&<button title="React" onClick={()=>setReactionPicker(reactionPicker===m.id?null:m.id)}>☺</button>}{m.body&&<button title="Copy message" onClick={()=>void copyText(m.body!,'Message')}>⧉</button>}</div>
-        <div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&!grouped&&<b className="sender-name">{m.sender.displayName}</b>}{m.body&&<MessageBody client={client} body={m.body}/>}<Attachment client={client} message={m}/>
+        <div className="message-actions">{m.id>0&&!m.deletedAt&&<button title="Reply" onClick={()=>beginReply(m)}>↩</button>}{m.id>0&&!m.deletedAt&&<button title="React" onClick={()=>setReactionPicker(reactionPicker===m.id?null:m.id)}>☺</button>}{m.sender.id===me.id&&m.id>0&&!m.deletedAt&&m.body&&<button title="Edit message" onClick={()=>beginEdit(m)}>✎</button>}{m.sender.id===me.id&&m.id>0&&!m.deletedAt&&<button title="Delete message" onClick={()=>void removeMessage(m)}>⌫</button>}{m.body&&!m.deletedAt&&<button title="Copy message" onClick={()=>void copyText(m.body!,'Message')}>⧉</button>}</div>
+        <div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&!grouped&&<b className="sender-name">{m.sender.displayName}</b>}<ReplyQuote message={m}/>{m.deletedAt?<div className="deleted-message">Message deleted</div>:<>{m.body&&<MessageBody client={client} body={m.body} me={me}/>}<Attachment client={client} message={m}/></>}
           {m.reactions?.length>0&&<div className="reactions">{m.reactions.map(r=><button key={r.emoji} className={r.userIds.includes(me.id)?'mine':''} title={`${r.userIds.length} reaction${r.userIds.length===1?'':'s'}`} onClick={()=>void toggleReaction(m,r.emoji)}>{r.emoji} <span>{r.userIds.length}</span></button>)}</div>}
           {reactionPicker===m.id&&m.id>0&&<div className="reaction-picker">{['👍','❤️','😂','😮','😢','🎉'].map(e=><button key={e} onClick={()=>void toggleReaction(m,e)}>{e}</button>)}</div>}
-          <span className="stamp">{fmtTime(m.createdAt)}{receiptView(m,c)}{m.sendState==='failed'&&<button className="retry-send" onClick={()=>retryMessage(m)}>Retry</button>}</span>
+          <span className="stamp">{m.editedAt&&!m.deletedAt?'edited · ':''}{fmtTime(m.createdAt)}{receiptView(m,c)}{m.sendState==='failed'&&<button className="retry-send" onClick={()=>retryMessage(m)}>Retry</button>}</span>
         </div></div>);
     });
     return nodes;
@@ -396,7 +427,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   return <div className="app-shell" onClick={()=>{if(audioRef.current?.state==='suspended')void audioRef.current.resume();}}>
     {connection!=='connected'&&<div className={`connection-pill ${connection}`}>{connection==='reconnecting'?'Reconnecting…':'Offline'}</div>}
     <aside className="sidebar">
-      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>@{me.username}</small></div></div><div className="top-actions"><button title={notificationPermission==='granted'?'Notifications enabled':'Enable notifications'} className={notificationPermission==='granted'?'enabled':''} onClick={()=>void enableNotifications()}>{notificationPermission==='granted'?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Add user" onClick={()=>setAdmin(true)}>＋</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={onLogout}>↪</button></div></div>
+      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>@{me.username}</small></div></div><div className="top-actions"><button title="Contacts & directory" onClick={()=>setContactsOpen(true)}>☷</button><button title={notificationPermission==='granted'?'Notifications enabled':'Enable notifications'} className={notificationPermission==='granted'?'enabled':''} onClick={()=>void enableNotifications()}>{notificationPermission==='granted'?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Add user" onClick={()=>setAdmin(true)}>＋</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={onLogout}>↪</button></div></div>
       <div className="search"><input placeholder="Search conversations" value={search} onChange={e=>setSearch(e.target.value)}/></div>
       <div className="conversation-list">{filtered.length?filtered.map(c=>{const lm=c.lastMessage;return <button key={c.id} className={'conversation '+(c.id===activeId?'active':'')} onClick={()=>setActiveId(c.id)}><Avatar name={conversationName(c)} avatarUrl={conversationAvatar(c)} online={c.isSelf?false:conversationOnline(c)}/><div className="conv-main"><div className="conv-line"><strong>{c.isSelf?'★ ':''}{conversationName(c)}</strong><time>{lm?fmtTime(lm.createdAt):''}</time></div><div className="conv-line"><span className="preview">{previewText(lm)}</span>{c.unreadCount>0&&<b className="badge">{c.unreadCount}</b>}</div></div></button>}):<div className="empty-side"><p>No conversations yet.</p><button className="secondary" onClick={()=>setNewChat(true)}>Start one</button></div>}</div>
     </aside>
@@ -411,13 +442,16 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
           <div ref={bottomRef}/>
         </section>
         <footer className="composer-wrap" onMouseDown={()=>setDrawer(null)}>
+          {replyingTo&&<div className="compose-context"><div><strong>Replying to {replyingTo.sender.displayName}</strong><span>{replyingTo.body||replyingTo.file?.name||'Message'}</span></div><button onClick={()=>setReplyingTo(null)}>×</button></div>}
+          {editing&&<div className="compose-context editing"><div><strong>Editing message</strong><span>{editing.body}</span></div><button onClick={()=>{setEditing(null);setText('')}}>×</button></div>}
           {recording&&<div className="recording-strip"><span className="record-dot"/><strong>Recording voice</strong><span>{Math.floor(recordingSeconds/60)}:{String(recordingSeconds%60).padStart(2,'0')}</span><button onClick={stopRecording}>Stop</button></div>}
           {pendingFile&&<div className="pending-file">{pendingFile.type.startsWith('image/')&&pendingUrl?<img src={pendingUrl} alt="Preview"/>:pendingFile.type.startsWith('audio/')&&pendingUrl?<audio src={pendingUrl} controls/>:<span className="file-glyph">{fileGlyph(pendingFile.name,pendingFile.type)}</span>}<div><strong>{pendingFile.type.startsWith('audio/')?'Voice message':pendingFile.name}</strong><small>{fmtBytes(pendingFile.size)} · ready to send</small></div><button title="Remove attachment" onClick={()=>setPendingFile(null)}>×</button></div>}
-          <div className="composer"><input ref={fileRef} type="file" hidden onChange={e=>{const f=e.target.files?.[0];if(f)queueFile(f)}}/><button className="clip" onClick={()=>fileRef.current?.click()} disabled={uploading||recording}>＋</button><textarea ref={composerRef} rows={1} value={text} onPaste={onPaste} onChange={e=>onText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={connection==='connected'?'Type a message or paste an image':'Waiting for connection…'}/><button className={`mic ${recording?'recording':''}`} title={recording?'Stop recording':'Record voice message'} onClick={recording?stopRecording:()=>void startRecording()} disabled={uploading||connection!=='connected'}>{recording?'■':'🎤'}</button><button className="send" onClick={()=>void send()} disabled={connection!=='connected'||uploading||recording||(!text.trim()&&!pendingFile)}>{uploading?'…':'➤'}</button></div>
+          <div className="composer"><input ref={fileRef} type="file" hidden onChange={e=>{const f=e.target.files?.[0];if(f)queueFile(f)}}/><button className="clip" onClick={()=>fileRef.current?.click()} disabled={uploading||recording||Boolean(editing)}>＋</button><textarea ref={composerRef} rows={1} value={text} onPaste={onPaste} onChange={e=>onText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={connection==='connected'?(editing?'Edit message':'Type a message or paste an image'):'Waiting for connection…'}/><button className={`mic ${recording?'recording':''}`} title={recording?'Stop recording':'Record voice message'} onClick={recording?stopRecording:()=>void startRecording()} disabled={uploading||connection!=='connected'||Boolean(editing)}>{recording?'■':'🎤'}</button><button className="send" onClick={()=>void send()} disabled={connection!=='connected'||uploading||recording||(!text.trim()&&!pendingFile)}>{uploading?'…':'➤'}</button></div>
         </footer>
       </>}
     </main>
     {drawer&&<ContextDrawer client={client} conversation={drawer.target==='conversation'?active:null} me={me} users={users} online={online} view={drawer.view} target={drawer.target} onView={view=>setDrawer(d=>d?{...d,view}:d)} onClose={()=>setDrawer(null)} onCopy={(text,label)=>void copyText(text,label)} onChangeAvatar={()=>avatarRef.current?.click()} onRenameGroup={renameActiveGroup} onAddMember={addActiveGroupMember} onRemoveMember={removeActiveGroupMember} onLeaveGroup={leaveActiveGroup}/>} 
+    {contactsOpen&&<ContactsModal client={client} me={me} online={online} onClose={()=>setContactsOpen(false)} onDirect={u=>{setContactsOpen(false);void direct(u)}} onChanged={()=>void refresh()}/>}
     {newChat&&<NewChatModal users={users} current={me} onClose={()=>setNewChat(false)} onDirect={direct} onGroup={group} onSaved={saved}/>} 
     {admin&&<AdminModal client={client} onClose={()=>setAdmin(false)} onCreated={()=>void refresh()}/>} 
     <div className="toast-stack">{toasts.map(t=><div key={t.id} className={`toast ${t.kind}`}><span>{t.text}</span><button onClick={()=>setToasts(x=>x.filter(y=>y.id!==t.id))}>×</button></div>)}</div>

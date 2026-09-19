@@ -11,9 +11,9 @@ import { config } from './config.js';
 import { requireAuth } from './auth.js';
 import { randomStoredName, verifyPassword } from './security.js';
 import {
-  conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
+  acceptContactRequest, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getUserById, getUserForLogin, history,
-  insertFile, isMember, listUsers, markReceipt, messageById, revokeToken, saveLinkPreview, setUserAvatar, toggleReaction, userCount,
+  deleteMessage, declineContactRequest, editMessage, insertFile, isMember, listContacts, listUsers, markReceipt, messageById, removeContact, revokeToken, saveLinkPreview, searchDirectory, sendContactRequest, setUserAvatar, toggleReaction, userCount,
   userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser
 } from './db.js';
 import type { LinkPreview } from './types.js';
@@ -22,7 +22,7 @@ const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.7.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.8.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -50,6 +50,20 @@ app.post('/api/users',requireAuth,(req,res)=>{
   try { res.status(201).json(createUser(username,displayName,password,Boolean(isAdmin))); }
   catch { res.status(409).json({error:'username_exists'}); }
 });
+
+
+app.get('/api/contacts',requireAuth,(req,res)=>res.json(listContacts(req.user!.id)));
+app.get('/api/contact-requests',requireAuth,(req,res)=>res.json(contactRequests(req.user!.id)));
+app.get('/api/directory',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.id,String(req.query.q??''))));
+app.post('/api/contact-requests',requireAuth,(req,res)=>{
+  const uid=Number(req.body?.userId); if(!uid) return res.status(400).json({error:'invalid_user'});
+  try{sendContactRequest(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
+});
+app.post('/api/contact-requests/:id/accept',requireAuth,(req,res)=>{
+  try{acceptContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();}catch{res.status(404).json({error:'request_not_found'});}
+});
+app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{declineContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();});
+app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{removeContact(req.user!.id,Number(req.params.userId));res.status(204).end();});
 
 app.get('/api/conversations',requireAuth,(req,res)=>{
   findOrCreateSelf(req.user!.id);
@@ -217,15 +231,28 @@ io.on('connection',(socket)=>{
     socket.join(`conversation:${cid}`); ack?.({ok:true});
   });
   socket.on('message:send',(payload,ack)=>{
-    const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null; const clientNonce=typeof payload?.clientNonce==='string'?payload.clientNonce.slice(0,80):null;
+    const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null; const clientNonce=typeof payload?.clientNonce==='string'?payload.clientNonce.slice(0,80):null; const replyToId=payload?.replyToId?Number(payload.replyToId):null;
     if(!isMember(cid,user.id)) return ack?.({ok:false,error:'not_a_member'});
     if(!body?.trim() && !fileId) return ack?.({ok:false,error:'empty_message'});
     try {
-      const message=createMessage(cid,user.id,body,fileId,clientNonce);
+      const message=createMessage(cid,user.id,body,fileId,clientNonce,replyToId);
       for(const uid of conversationMemberIds(cid)) io.to(roomForUser(uid)).emit('message:new',message);
       ack?.({ok:true,message});
     } catch { ack?.({ok:false,error:'send_failed'}); }
   });
+  socket.on('message:edit',(payload,ack)=>{
+    const mid=Number(payload?.messageId), body=String(payload?.body??''); const existing=messageById(mid);
+    if(!existing || !isMember(existing.conversationId,user.id)) return ack?.({ok:false,error:'forbidden'});
+    try{const message=editMessage(mid,user.id,body);for(const uid of conversationMemberIds(message.conversationId))io.to(roomForUser(uid)).emit('message:update',message);ack?.({ok:true,message});}
+    catch(e:any){ack?.({ok:false,error:e?.message||'edit_failed'});}
+  });
+  socket.on('message:delete',(payload,ack)=>{
+    const mid=Number(payload?.messageId); const existing=messageById(mid);
+    if(!existing || !isMember(existing.conversationId,user.id)) return ack?.({ok:false,error:'forbidden'});
+    try{const message=deleteMessage(mid,user.id);for(const uid of conversationMemberIds(message.conversationId))io.to(roomForUser(uid)).emit('message:update',message);ack?.({ok:true,message});}
+    catch(e:any){ack?.({ok:false,error:e?.message||'delete_failed'});}
+  });
+
   socket.on('reaction:toggle',(payload,ack)=>{
     const mid=Number(payload?.messageId); const emoji=String(payload?.emoji??''); const m=messageById(mid);
     if(!m || !isMember(m.conversationId,user.id)) return ack?.({ok:false,error:'not_a_member'});

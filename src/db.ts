@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
 import { hashPassword, hashToken, newSessionToken } from './security.js';
-import type { ConversationInventory, ConversationSummary, LinkPreview, MessageView, PublicUser } from './types.js';
+import type { ContactRequestsView, ConversationInventory, ConversationSummary, DirectoryUser, LinkPreview, MessageView, PublicUser, ReplyPreview } from './types.js';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 fs.mkdirSync(config.uploadDir, { recursive: true });
@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS message_receipts (
   read_at TEXT,
   PRIMARY KEY(message_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS contacts (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, contact_id)
+);
+CREATE TABLE IF NOT EXISTS contact_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(sender_id, recipient_id)
+);
 CREATE TABLE IF NOT EXISTS link_previews (
   url TEXT PRIMARY KEY,
   title TEXT,
@@ -95,6 +108,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(token_hash);
 const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as any[];
 if (!messageColumns.some(c => String(c.name) === 'client_nonce')) db.exec('ALTER TABLE messages ADD COLUMN client_nonce TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_sender_nonce ON messages(sender_id,client_nonce) WHERE client_nonce IS NOT NULL');
+
+// v0.8 migration: replies and soft-deleted messages.
+const messageColumnsV08 = db.prepare('PRAGMA table_info(messages)').all() as any[];
+if (!messageColumnsV08.some(c => String(c.name) === 'reply_to_id')) db.exec('ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id)');
+if (!messageColumnsV08.some(c => String(c.name) === 'deleted_at')) db.exec('ALTER TABLE messages ADD COLUMN deleted_at TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_contact_requests_recipient ON contact_requests(recipient_id);');
+db.exec('CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);');
 
 // v0.4 migration: existing v0.1-v0.3 databases do not have HIDs.
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
@@ -245,19 +265,48 @@ export function messageById(id: number): MessageView | null {
   const reactionMap=new Map<string,number[]>();
   for(const x of reactionRows){const emoji=String(x.emoji);const arr=reactionMap.get(emoji)||[];arr.push(Number(x.user_id));reactionMap.set(emoji,arr);}
   const reactions=[...reactionMap.entries()].map(([emoji,userIds])=>({emoji,userIds}));
-  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:r.body ?? null, file:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null, receipts, reactions, clientNonce:r.client_nonce?String(r.client_nonce):null };
+  let replyTo: ReplyPreview | null = null;
+  if (r.reply_to_id) {
+    const q=db.prepare(`SELECT m.id,m.type,m.body,m.file_id,m.deleted_at,u.hid,u.username,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(Number(r.reply_to_id)) as any;
+    if(q) replyTo={id:Number(q.id),sender:publicUser(q),type:q.type,body:q.deleted_at?null:(q.body??null),file:q.deleted_at?null:fileForMessage(q.file_id?Number(q.file_id):null),deletedAt:q.deleted_at?String(q.deleted_at):null};
+  }
+  const deletedAt=r.deleted_at?String(r.deleted_at):null;
+  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:deletedAt?null:(r.body ?? null), file:deletedAt?null:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null, deletedAt, replyTo, receipts, reactions, clientNonce:r.client_nonce?String(r.client_nonce):null };
 }
 
-export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null, clientNonce: string | null = null): MessageView {
+export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null, clientNonce: string | null = null, replyToId: number | null = null): MessageView {
   if(clientNonce){const existing=db.prepare('SELECT id FROM messages WHERE sender_id=? AND client_nonce=?').get(senderId,clientNonce) as any;if(existing)return messageById(Number(existing.id))!;}
   const file = fileId ? (db.prepare('SELECT mime_type FROM files WHERE id=? AND owner_id=?').get(fileId, senderId) as any) : null;
   if (fileId && !file) throw new Error('invalid_file');
+  if (replyToId) {
+    const reply=db.prepare('SELECT conversation_id,deleted_at FROM messages WHERE id=?').get(replyToId) as any;
+    if(!reply || Number(reply.conversation_id)!==conversationId) throw new Error('invalid_reply');
+  }
   const type = file ? (String(file.mime_type).startsWith('image/') ? 'image' : 'file') : 'text';
-  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id,client_nonce) VALUES(?,?,?,?,?,?)').run(conversationId,senderId,type,body?.trim() || null,fileId,clientNonce);
+  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id,client_nonce,reply_to_id) VALUES(?,?,?,?,?,?,?)').run(conversationId,senderId,type,body?.trim() || null,fileId,clientNonce,replyToId);
   const messageId = Number(info.lastInsertRowid);
   for (const uid of conversationMemberIds(conversationId)) {
     db.prepare('INSERT OR IGNORE INTO message_receipts(message_id,user_id) VALUES(?,?)').run(messageId,uid);
   }
+  return messageById(messageId)!;
+}
+
+export function editMessage(messageId:number,userId:number,body:string): MessageView {
+  const row=db.prepare('SELECT sender_id,deleted_at FROM messages WHERE id=?').get(messageId) as any;
+  if(!row) throw new Error('not_found');
+  if(Number(row.sender_id)!==userId) throw new Error('forbidden');
+  if(row.deleted_at) throw new Error('deleted');
+  const clean=body.trim(); if(!clean) throw new Error('invalid_body');
+  db.prepare('UPDATE messages SET body=?,edited_at=? WHERE id=?').run(clean,new Date().toISOString(),messageId);
+  return messageById(messageId)!;
+}
+
+export function deleteMessage(messageId:number,userId:number): MessageView {
+  const row=db.prepare('SELECT sender_id,deleted_at FROM messages WHERE id=?').get(messageId) as any;
+  if(!row) throw new Error('not_found');
+  if(Number(row.sender_id)!==userId) throw new Error('forbidden');
+  if(!row.deleted_at) db.prepare('UPDATE messages SET body=NULL,file_id=NULL,deleted_at=? WHERE id=?').run(new Date().toISOString(),messageId);
+  db.prepare('DELETE FROM message_reactions WHERE message_id=?').run(messageId);
   return messageById(messageId)!;
 }
 
@@ -369,7 +418,7 @@ export function conversationInventory(conversationId:number): ConversationInvent
     FROM messages m
     JOIN users u ON u.id=m.sender_id
     LEFT JOIN files f ON f.id=m.file_id
-    WHERE m.conversation_id=?
+    WHERE m.conversation_id=? AND m.deleted_at IS NULL
     ORDER BY m.id DESC
   `).all(conversationId) as any[];
   const media: ConversationInventory['media'] = [];
@@ -406,4 +455,65 @@ export function saveLinkPreview(preview:LinkPreview): void {
     VALUES(?,?,?,?,?,?,?)
     ON CONFLICT(url) DO UPDATE SET title=excluded.title,description=excluded.description,image_url=excluded.image_url,site_name=excluded.site_name,hostname=excluded.hostname,fetched_at=excluded.fetched_at
   `).run(preview.url,preview.title,preview.description,preview.imageUrl,preview.siteName,preview.hostname,new Date().toISOString());
+}
+
+
+export function listContacts(userId:number): PublicUser[] {
+  return (db.prepare(`SELECT u.* FROM contacts c JOIN users u ON u.id=c.contact_id WHERE c.user_id=? AND u.disabled=0 ORDER BY u.display_name COLLATE NOCASE`).all(userId) as any[]).map(publicUser);
+}
+
+function requestView(row:any) {
+  const sender=getUserById(Number(row.sender_id)); const recipient=getUserById(Number(row.recipient_id));
+  if(!sender||!recipient) return null;
+  return {id:Number(row.id),sender,recipient,createdAt:String(row.created_at)};
+}
+
+export function contactRequests(userId:number): ContactRequestsView {
+  const incoming=(db.prepare('SELECT * FROM contact_requests WHERE recipient_id=? ORDER BY id DESC').all(userId) as any[]).map(requestView).filter(Boolean) as any[];
+  const outgoing=(db.prepare('SELECT * FROM contact_requests WHERE sender_id=? ORDER BY id DESC').all(userId) as any[]).map(requestView).filter(Boolean) as any[];
+  return {incoming,outgoing};
+}
+
+export function searchDirectory(userId:number,q:string): DirectoryUser[] {
+  const term=q.trim(); const like=`%${term}%`;
+  const rows=(term?db.prepare(`SELECT * FROM users WHERE disabled=0 AND (display_name LIKE ? COLLATE NOCASE OR username LIKE ? COLLATE NOCASE OR hid LIKE ? COLLATE NOCASE) ORDER BY display_name COLLATE NOCASE LIMIT 100`).all(like,like,like):db.prepare('SELECT * FROM users WHERE disabled=0 ORDER BY display_name COLLATE NOCASE LIMIT 100').all()) as any[];
+  return rows.map(row=>{
+    const u=publicUser(row); let relationship:DirectoryUser['relationship']='none';
+    if(u.id===userId) relationship='self';
+    else if(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(userId,u.id)) relationship='contact';
+    else if(db.prepare('SELECT 1 FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(userId,u.id)) relationship='outgoing';
+    else if(db.prepare('SELECT 1 FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(u.id,userId)) relationship='incoming';
+    return {...u,relationship};
+  });
+}
+
+export function sendContactRequest(senderId:number,recipientId:number): void {
+  if(senderId===recipientId) throw new Error('invalid_user');
+  if(!getUserById(recipientId)) throw new Error('invalid_user');
+  if(db.prepare('SELECT 1 FROM contacts WHERE user_id=? AND contact_id=?').get(senderId,recipientId)) throw new Error('already_contact');
+  const reverse=db.prepare('SELECT id FROM contact_requests WHERE sender_id=? AND recipient_id=?').get(recipientId,senderId) as any;
+  if(reverse){acceptContactRequest(Number(reverse.id),senderId);return;}
+  db.prepare('INSERT OR IGNORE INTO contact_requests(sender_id,recipient_id) VALUES(?,?)').run(senderId,recipientId);
+}
+
+export function acceptContactRequest(requestId:number,recipientId:number): void {
+  const row=db.prepare('SELECT * FROM contact_requests WHERE id=? AND recipient_id=?').get(requestId,recipientId) as any;
+  if(!row) throw new Error('not_found');
+  db.exec('BEGIN');
+  try{
+    db.prepare('INSERT OR IGNORE INTO contacts(user_id,contact_id) VALUES(?,?)').run(Number(row.sender_id),recipientId);
+    db.prepare('INSERT OR IGNORE INTO contacts(user_id,contact_id) VALUES(?,?)').run(recipientId,Number(row.sender_id));
+    db.prepare('DELETE FROM contact_requests WHERE id=?').run(requestId);
+    db.prepare('DELETE FROM contact_requests WHERE sender_id=? AND recipient_id=?').run(recipientId,Number(row.sender_id));
+    db.exec('COMMIT');
+  }catch(e){db.exec('ROLLBACK');throw e;}
+}
+
+export function declineContactRequest(requestId:number,userId:number): void {
+  db.prepare('DELETE FROM contact_requests WHERE id=? AND (recipient_id=? OR sender_id=?)').run(requestId,userId,userId);
+}
+
+export function removeContact(userId:number,contactId:number): void {
+  db.exec('BEGIN');
+  try{db.prepare('DELETE FROM contacts WHERE user_id=? AND contact_id=?').run(userId,contactId);db.prepare('DELETE FROM contacts WHERE user_id=? AND contact_id=?').run(contactId,userId);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
 }

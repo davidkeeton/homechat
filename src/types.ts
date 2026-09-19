@@ -44,6 +44,15 @@ export interface MessageReceiptView {
   readAt: string | null;
 }
 
+export interface ReplyPreview {
+  id: number;
+  sender: PublicUser;
+  type: MessageType;
+  body: string | null;
+  file: FileView | null;
+  deletedAt: string | null;
+}
+
 export interface MessageView {
   id: number;
   conversationId: number;
@@ -53,6 +62,8 @@ export interface MessageView {
   file: FileView | null;
   createdAt: string;
   editedAt: string | null;
+  deletedAt: string | null;
+  replyTo: ReplyPreview | null;
   receipts: MessageReceiptView[];
   reactions: MessageReactionView[];
   clientNonce?: string | null;
@@ -85,4 +96,20 @@ export interface LinkPreview {
   imageUrl: string | null;
   siteName: string | null;
   hostname: string;
+}
+
+export interface ContactRequestView {
+  id: number;
+  sender: PublicUser;
+  recipient: PublicUser;
+  createdAt: string;
+}
+
+export interface ContactRequestsView {
+  incoming: ContactRequestView[];
+  outgoing: ContactRequestView[];
+}
+
+export interface DirectoryUser extends PublicUser {
+  relationship: 'self' | 'contact' | 'incoming' | 'outgoing' | 'none';
 }

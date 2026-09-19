@@ -1,5 +1,19 @@
 # HomeChat
 
+A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
+
+## v0.8 social + message interaction pass
+
+- Contact list and contact requests
+- Searchable user directory by name, username, or HID
+- Reply/quote messages
+- Edit your own text messages
+- Soft-delete your own messages
+- @username mention highlighting
+- Existing realtime, optimistic-send, reactions, receipts, pagination, media/files/links inventory, and details UI remain intact
+
+# HomeChat
+
 A small self-hosted household messenger with a built-in web client. HomeChat is intentionally direct-message/group-chat first rather than a Teams/Discord-style workspace.
 
 ### Details & identity

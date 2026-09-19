@@ -4,28 +4,67 @@ export type User = { id:number; hid:string; username:string; displayName:string;
 export type FileView = { id:number; name:string; mimeType:string; size:number; url:string };
 export type MessageReceipt = { userId:number; deliveredAt:string|null; readAt:string|null };
 export type MessageReaction = { emoji:string; userIds:number[] };
-export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; receipts:MessageReceipt[]; reactions:MessageReaction[]; clientNonce?:string|null };
+export type ReplyPreview = { id:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; deletedAt:string|null };
+export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; deletedAt:string|null; replyTo:ReplyPreview|null; receipts:MessageReceipt[]; reactions:MessageReaction[]; clientNonce?:string|null };
+export type ContactRequest = { id:number; sender:User; recipient:User; createdAt:string };
+export type ContactRequests = { incoming:ContactRequest[]; outgoing:ContactRequest[] };
+export type DirectoryUser = User & { relationship:'self'|'contact'|'incoming'|'outgoing'|'none' };
 export type Conversation = { id:number; type:'direct'|'group'; isSelf:boolean; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
-export type ConversationInventory = { media:any[]; files:any[]; links:any[] };
+export type InventoryAttachment = { messageId:number; sender:User; file:FileView; createdAt:string };
+export type InventoryLink = { messageId:number; sender:User; url:string; createdAt:string };
+export type ConversationInventory = { media:InventoryAttachment[]; files:InventoryAttachment[]; links:InventoryLink[] };
+export type LinkPreview = { url:string; title:string|null; description:string|null; imageUrl:string|null; siteName:string|null; hostname:string };
+
+type LoginResponse = { token:string; user:User };
 
 export class HomeClient {
-  private socket?: Socket;
+  socket?: Socket;
   constructor(public baseUrl:string, public token:string) {}
-  async api<T>(path:string, init:RequestInit={}):Promise<T>{
-    const headers=new Headers(init.headers); if(!(init.body instanceof FormData))headers.set('Content-Type','application/json'); headers.set('Authorization',`Bearer ${this.token}`);
-    const r=await fetch(`${this.baseUrl}${path}`,{...init,headers}); if(!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.status===204?undefined as T:r.json();
+
+  static async login(baseUrl:string, username:string, password:string):Promise<LoginResponse> {
+    const r = await fetch(`${baseUrl}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password}) });
+    if (!r.ok) throw new Error('Invalid username or password');
+    return r.json();
   }
-  connect(){ this.socket=io(this.baseUrl,{auth:{token:this.token}}); return this.socket; }
+
+  async api<T>(path:string, init:RequestInit={}):Promise<T> {
+    const headers = new Headers(init.headers);
+    if (!(init.body instanceof FormData)) headers.set('Content-Type','application/json');
+    headers.set('Authorization',`Bearer ${this.token}`);
+    const r = await fetch(`${this.baseUrl}${path}`, {...init, headers});
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return r.status===204 ? undefined as T : r.json();
+  }
+
+  connect(){ this.socket = io(this.baseUrl,{auth:{token:this.token}}); return this.socket; }
   disconnect(){ this.socket?.disconnect(); }
-  conversations(){return this.api<Conversation[]>('/api/conversations');}
-  messages(conversationId:number,before?:number){return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`);}
-  inventory(conversationId:number){return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`);}
-  savedMessages(){return this.api<{id:number}>('/api/conversations/self',{method:'POST'});}
-  renameGroup(conversationId:number,name:string){return this.api<void>(`/api/conversations/${conversationId}/group`,{method:'PATCH',body:JSON.stringify({name})});}
-  addGroupMember(conversationId:number,userId:number){return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})});}
-  removeGroupMember(conversationId:number,userId:number){return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'});}
-  send(conversationId:number,body?:string,fileId?:number){return new Promise((resolve,reject)=>this.socket?.emit('message:send',{conversationId,body,fileId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed'))));}
-  typing(conversationId:number,typing:boolean){this.socket?.emit('typing:set',{conversationId,typing});}
-  receipt(messageId:number,kind:'delivered'|'read'){this.socket?.emit('receipt:set',{messageId,kind});}
-  async upload(file:File){const fd=new FormData();fd.append('file',file);return this.api<FileView>('/api/files',{method:'POST',body:fd});}
+  me(){ return this.api<User>('/api/me'); }
+  users(){ return this.api<User[]>('/api/users'); }
+  contacts(){ return this.api<User[]>('/api/contacts'); }
+  contactRequests(){ return this.api<ContactRequests>('/api/contact-requests'); }
+  directory(q=''){ return this.api<DirectoryUser[]>(`/api/directory?q=${encodeURIComponent(q)}`); }
+  requestContact(userId:number){ return this.api<void>('/api/contact-requests',{method:'POST',body:JSON.stringify({userId})}); }
+  acceptContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
+  declineContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}`,{method:'DELETE'}); }
+  removeContact(userId:number){ return this.api<void>(`/api/contacts/${userId}`,{method:'DELETE'}); }
+  conversations(){ return this.api<Conversation[]>('/api/conversations'); }
+  messages(conversationId:number,before?:number){ return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`); }
+  inventory(conversationId:number){ return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`); }
+  linkPreview(url:string){ return this.api<LinkPreview>(`/api/link-preview?url=${encodeURIComponent(url)}`); }
+  savedMessages(){ return this.api<{id:number}>('/api/conversations/self',{method:'POST'}); }
+  createDirect(userId:number){ return this.api<{id:number}>('/api/conversations/direct',{method:'POST',body:JSON.stringify({userId})}); }
+  createGroup(name:string,memberIds:number[]){ return this.api<{id:number}>('/api/conversations/group',{method:'POST',body:JSON.stringify({name,memberIds})}); }
+  renameGroup(conversationId:number,name:string){ return this.api<void>(`/api/conversations/${conversationId}/group`,{method:'PATCH',body:JSON.stringify({name})}); }
+  addGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})}); }
+  removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
+  createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
+  send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:send',{conversationId,body,fileId,clientNonce,replyToId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')));}); }
+  editMessage(messageId:number,body:string){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:edit',{messageId,body},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'edit_failed')));}); }
+  deleteMessage(messageId:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:delete',{messageId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'delete_failed')));}); }
+  reaction(messageId:number,emoji:string){ return new Promise<MessageReaction[]>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('reaction:toggle',{messageId,emoji},(r:any)=>r?.ok?resolve(r.reactions):reject(new Error(r?.error??'reaction_failed')));}); }
+  typing(conversationId:number,typing:boolean){ this.socket?.emit('typing:set',{conversationId,typing}); }
+  receipt(messageId:number,kind:'delivered'|'read'){ this.socket?.emit('receipt:set',{messageId,kind}); }
+  async upload(file:File){ const fd=new FormData();fd.append('file',file); return this.api<FileView>('/api/files',{method:'POST',body:fd}); }
+  async uploadAvatar(file:File){ const fd=new FormData();fd.append('file',file); return this.api<User>('/api/me/avatar',{method:'POST',body:fd}); }
+  async fileBlob(fileId:number){ const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}}); if(!r.ok)throw new Error('file_failed'); return r.blob(); }
 }
