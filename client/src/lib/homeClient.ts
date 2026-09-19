@@ -39,5 +39,6 @@ export class HomeClient {
   typing(conversationId:number,typing:boolean){ this.socket?.emit('typing:set',{conversationId,typing}); }
   receipt(messageId:number,kind:'delivered'|'read'){ this.socket?.emit('receipt:set',{messageId,kind}); }
   async upload(file:File){ const fd=new FormData();fd.append('file',file); return this.api<FileView>('/api/files',{method:'POST',body:fd}); }
+  async uploadAvatar(file:File){ const fd=new FormData();fd.append('file',file); return this.api<User>('/api/me/avatar',{method:'POST',body:fd}); }
   async fileBlob(fileId:number){ const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}}); if(!r.ok)throw new Error('file_failed'); return r.blob(); }
 }

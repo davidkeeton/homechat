@@ -209,6 +209,23 @@ export function insertFile(ownerId:number, originalName:string, storedName:strin
 
 export function getFile(id:number): any | null { return (db.prepare('SELECT * FROM files WHERE id=?').get(id) as any) ?? null; }
 
+export function setUserAvatar(userId:number,fileId:number): PublicUser {
+  const f=db.prepare('SELECT * FROM files WHERE id=? AND owner_id=?').get(fileId,userId) as any;
+  if(!f || !String(f.mime_type).startsWith('image/')) throw new Error('invalid_avatar');
+  const url=`/api/avatars/${fileId}`;
+  db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run(url,userId);
+  return getUserById(userId)!;
+}
+
+export function getAvatarFile(fileId:number): any | null {
+  const url=`/api/avatars/${fileId}`;
+  return (db.prepare(`
+    SELECT f.* FROM files f
+    JOIN users u ON u.avatar_url=?
+    WHERE f.id=? LIMIT 1
+  `).get(url,fileId) as any) ?? null;
+}
+
 export function conversationSummaries(userId:number): ConversationSummary[] {
   const rows = db.prepare(`SELECT c.* FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY c.id DESC`).all(userId) as any[];
   return rows.map(c => {

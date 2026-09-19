@@ -68,11 +68,26 @@ Server → client:
 - `presence:update`
 - `presence:snapshot`
 
+
+## v0.3 client polish
+
+The bundled web client now includes:
+
+* Clipboard image paste: copy a screenshot/image and press Ctrl+V in the composer.
+* Attachment preview before sending for pasted, picked, and dropped files.
+* Improved deterministic avatars plus optional uploaded profile pictures (click your own avatar).
+* Browser notifications, notification sound, and unread count in the page title.
+* Image lightbox with download action.
+* Richer file cards with type and size.
+* Source maps in client production builds to make early debugging less painful.
+
+Browser notifications generally require a secure context (HTTPS) in Chromium-based browsers. The rest of HomeChat continues to work over plain LAN HTTP; native desktop packaging can provide notifications later without that browser restriction.
+
 ## Client integration
 
 `sdk/homeClient.ts` is the boundary between the UI and the backend. The Retrogram-style React/Electron UI should call this adapter rather than importing Socket.IO throughout the component tree.
 
-## v0.1 limitations
+## Current limitations
 
 - No end-to-end encryption.
 - No voice/video.

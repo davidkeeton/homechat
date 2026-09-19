@@ -11,14 +11,14 @@ import { randomStoredName, verifyPassword } from './security.js';
 import {
   conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   findOrCreateDirect, getFile, getUserById, getUserForLogin, history, insertFile, isMember, listUsers,
-  markReceipt, messageById, revokeToken, userCount, userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser
+  markReceipt, messageById, revokeToken, userCount, userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setUserAvatar, getAvatarFile
 } from './db.js';
 
 const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.1.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.3.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -88,6 +88,21 @@ app.post('/api/files',requireAuth,upload.single('file'),(req,res)=>{
   if (!req.file) return res.status(400).json({error:'missing_file'});
   const id=insertFile(req.user!.id,req.file.originalname,req.file.filename,req.file.mimetype || 'application/octet-stream',req.file.size);
   res.status(201).json({id,name:req.file.originalname,mimeType:req.file.mimetype,size:req.file.size,url:`/api/files/${id}`});
+});
+app.post('/api/me/avatar',requireAuth,upload.single('file'),(req,res)=>{
+  if (!req.file) return res.status(400).json({error:'missing_file'});
+  if (!String(req.file.mimetype).startsWith('image/')) {
+    try { fs.unlinkSync(req.file.path); } catch {}
+    return res.status(400).json({error:'avatar_must_be_image'});
+  }
+  const id=insertFile(req.user!.id,req.file.originalname,req.file.filename,req.file.mimetype || 'application/octet-stream',req.file.size);
+  try { res.json(setUserAvatar(req.user!.id,id)); }
+  catch { res.status(400).json({error:'invalid_avatar'}); }
+});
+app.get('/api/avatars/:id',(req,res)=>{
+  const fid=Number(req.params.id); const f=getAvatarFile(fid); if(!f) return res.status(404).end();
+  res.setHeader('Cache-Control','public, max-age=86400');
+  res.type(f.mime_type); res.sendFile(path.join(config.uploadDir,f.stored_name));
 });
 app.get('/api/files/:id',requireAuth,(req,res)=>{
   const fid=Number(req.params.id); const f=getFile(fid); if(!f) return res.status(404).json({error:'not_found'});
