@@ -371,18 +371,25 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
 
   function renderMessages(c:Conversation){
     const list=messages[c.id]||[];const nodes:React.ReactNode[]=[];let previousDay='';const unreadId=unreadStart[c.id];
-    for(const m of list){
+    const sameGroup=(a:UiMessage,b:UiMessage)=>a.sender.id===b.sender.id&&dayKey(a.createdAt)===dayKey(b.createdAt)&&Math.abs(new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime())<5*60*1000;
+    list.forEach((m,i)=>{
       const dk=dayKey(m.createdAt);
-      if(dk!==previousDay){nodes.push(<div className="date-separator" key={`date-${m.id}`}><span>{dayLabel(m.createdAt)}</span></div>);previousDay=dk;}
-      if(unreadId===m.id)nodes.push(<div className="unread-divider" key={`unread-${m.id}`}><span>Unread messages</span></div>);
-      nodes.push(<div className={'message-row '+(m.sender.id===me.id?'mine':'theirs')+(m.sendState==='failed'?' failed-message':'')} key={m.id}>
+      const dateBreak=dk!==previousDay;
+      const unreadBreak=unreadId===m.id;
+      if(dateBreak){nodes.push(<div className="date-separator" key={`date-${m.id}`}><span>{dayLabel(m.createdAt)}</span></div>);previousDay=dk;}
+      if(unreadBreak)nodes.push(<div className="unread-divider" key={`unread-${m.id}`}><span>Unread messages</span></div>);
+      const prev=list[i-1];
+      const next=list[i+1];
+      const grouped=!dateBreak&&!unreadBreak&&!!prev&&sameGroup(prev,m);
+      const groupEnd=!next||unreadId===next.id||dayKey(next.createdAt)!==dk||!sameGroup(m,next);
+      nodes.push(<div className={'message-row '+(m.sender.id===me.id?'mine':'theirs')+(m.sendState==='failed'?' failed-message':'')+(grouped?' grouped':'')+(groupEnd?' group-end':'')} key={m.id}>
         <div className="message-actions">{m.id>0&&<button title="React" onClick={()=>setReactionPicker(reactionPicker===m.id?null:m.id)}>☺</button>}{m.body&&<button title="Copy message" onClick={()=>void copyText(m.body!,'Message')}>⧉</button>}</div>
-        <div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&<b className="sender-name">{m.sender.displayName}</b>}{m.body&&<MessageBody client={client} body={m.body}/>}<Attachment client={client} message={m}/>
+        <div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&!grouped&&<b className="sender-name">{m.sender.displayName}</b>}{m.body&&<MessageBody client={client} body={m.body}/>}<Attachment client={client} message={m}/>
           {m.reactions?.length>0&&<div className="reactions">{m.reactions.map(r=><button key={r.emoji} className={r.userIds.includes(me.id)?'mine':''} title={`${r.userIds.length} reaction${r.userIds.length===1?'':'s'}`} onClick={()=>void toggleReaction(m,r.emoji)}>{r.emoji} <span>{r.userIds.length}</span></button>)}</div>}
           {reactionPicker===m.id&&m.id>0&&<div className="reaction-picker">{['👍','❤️','😂','😮','😢','🎉'].map(e=><button key={e} onClick={()=>void toggleReaction(m,e)}>{e}</button>)}</div>}
           <span className="stamp">{fmtTime(m.createdAt)}{receiptView(m,c)}{m.sendState==='failed'&&<button className="retry-send" onClick={()=>retryMessage(m)}>Retry</button>}</span>
         </div></div>);
-    }
+    });
     return nodes;
   }
 
