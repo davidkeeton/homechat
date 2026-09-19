@@ -3,7 +3,8 @@ import { io, type Socket } from 'socket.io-client';
 export type User = { id:number; hid:string; username:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
 export type FileView = { id:number; name:string; mimeType:string; size:number; url:string };
 export type MessageReceipt = { userId:number; deliveredAt:string|null; readAt:string|null };
-export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; receipts:MessageReceipt[] };
+export type MessageReaction = { emoji:string; userIds:number[] };
+export type Message = { id:number; conversationId:number; sender:User; type:'text'|'image'|'file'; body:string|null; file:FileView|null; createdAt:string; editedAt:string|null; receipts:MessageReceipt[]; reactions:MessageReaction[]; clientNonce?:string|null };
 export type Conversation = { id:number; type:'direct'|'group'; isSelf:boolean; name:string|null; avatarUrl:string|null; members:User[]; unreadCount:number; lastMessage:Message|null };
 export type InventoryAttachment = { messageId:number; sender:User; file:FileView; createdAt:string };
 export type InventoryLink = { messageId:number; sender:User; url:string; createdAt:string };
@@ -46,7 +47,8 @@ export class HomeClient {
   addGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})}); }
   removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
   createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
-  send(conversationId:number,body?:string,fileId?:number){ return new Promise<Message>((resolve,reject)=>this.socket?.emit('message:send',{conversationId,body,fileId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')))); }
+  send(conversationId:number,body?:string,fileId?:number,clientNonce?:string){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:send',{conversationId,body,fileId,clientNonce},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')));}); }
+  reaction(messageId:number,emoji:string){ return new Promise<MessageReaction[]>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('reaction:toggle',{messageId,emoji},(r:any)=>r?.ok?resolve(r.reactions):reject(new Error(r?.error??'reaction_failed')));}); }
   typing(conversationId:number,typing:boolean){ this.socket?.emit('typing:set',{conversationId,typing}); }
   receipt(messageId:number,kind:'delivered'|'read'){ this.socket?.emit('receipt:set',{messageId,kind}); }
   async upload(file:File){ const fd=new FormData();fd.append('file',file); return this.api<FileView>('/api/files',{method:'POST',body:fd}); }

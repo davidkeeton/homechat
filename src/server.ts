@@ -13,7 +13,7 @@ import { randomStoredName, verifyPassword } from './security.js';
 import {
   conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getUserById, getUserForLogin, history,
-  insertFile, isMember, listUsers, markReceipt, messageById, revokeToken, saveLinkPreview, setUserAvatar, userCount,
+  insertFile, isMember, listUsers, markReceipt, messageById, revokeToken, saveLinkPreview, setUserAvatar, toggleReaction, userCount,
   userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser
 } from './db.js';
 import type { LinkPreview } from './types.js';
@@ -22,7 +22,7 @@ const app = express();
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.6.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:'0.7.0'}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
@@ -217,14 +217,20 @@ io.on('connection',(socket)=>{
     socket.join(`conversation:${cid}`); ack?.({ok:true});
   });
   socket.on('message:send',(payload,ack)=>{
-    const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null;
+    const cid=Number(payload?.conversationId); const body=typeof payload?.body==='string'?payload.body:null; const fileId=payload?.fileId?Number(payload.fileId):null; const clientNonce=typeof payload?.clientNonce==='string'?payload.clientNonce.slice(0,80):null;
     if(!isMember(cid,user.id)) return ack?.({ok:false,error:'not_a_member'});
     if(!body?.trim() && !fileId) return ack?.({ok:false,error:'empty_message'});
     try {
-      const message=createMessage(cid,user.id,body,fileId);
+      const message=createMessage(cid,user.id,body,fileId,clientNonce);
       for(const uid of conversationMemberIds(cid)) io.to(roomForUser(uid)).emit('message:new',message);
       ack?.({ok:true,message});
     } catch { ack?.({ok:false,error:'send_failed'}); }
+  });
+  socket.on('reaction:toggle',(payload,ack)=>{
+    const mid=Number(payload?.messageId); const emoji=String(payload?.emoji??''); const m=messageById(mid);
+    if(!m || !isMember(m.conversationId,user.id)) return ack?.({ok:false,error:'not_a_member'});
+    try{const reactions=toggleReaction(mid,user.id,emoji);for(const uid of conversationMemberIds(m.conversationId))io.to(roomForUser(uid)).emit('reaction:update',{messageId:mid,reactions});ack?.({ok:true,reactions});}
+    catch{ack?.({ok:false,error:'reaction_failed'});}
   });
   socket.on('typing:set',(payload)=>{
     const cid=Number(payload?.conversationId); if(!isMember(cid,user.id)) return;

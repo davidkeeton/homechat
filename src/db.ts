@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   edited_at TEXT
 );
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(message_id, user_id, emoji)
+);
 CREATE TABLE IF NOT EXISTS message_receipts (
   message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -82,6 +89,12 @@ CREATE TABLE IF NOT EXISTS link_previews (
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id,id DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(token_hash);
 `);
+
+
+// v0.7 migration: idempotent client nonces make optimistic-send retries safe.
+const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as any[];
+if (!messageColumns.some(c => String(c.name) === 'client_nonce')) db.exec('ALTER TABLE messages ADD COLUMN client_nonce TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_sender_nonce ON messages(sender_id,client_nonce) WHERE client_nonce IS NOT NULL');
 
 // v0.4 migration: existing v0.1-v0.3 databases do not have HIDs.
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
@@ -228,14 +241,19 @@ export function messageById(id: number): MessageView | null {
   const receipts=(db.prepare('SELECT user_id,delivered_at,read_at FROM message_receipts WHERE message_id=? ORDER BY user_id').all(id) as any[]).map(x=>({
     userId:Number(x.user_id), deliveredAt:x.delivered_at?String(x.delivered_at):null, readAt:x.read_at?String(x.read_at):null
   }));
-  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:r.body ?? null, file:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null, receipts };
+  const reactionRows=db.prepare('SELECT emoji,user_id FROM message_reactions WHERE message_id=? ORDER BY emoji,user_id').all(id) as any[];
+  const reactionMap=new Map<string,number[]>();
+  for(const x of reactionRows){const emoji=String(x.emoji);const arr=reactionMap.get(emoji)||[];arr.push(Number(x.user_id));reactionMap.set(emoji,arr);}
+  const reactions=[...reactionMap.entries()].map(([emoji,userIds])=>({emoji,userIds}));
+  return { id:Number(r.id), conversationId:Number(r.conversation_id), sender:publicUser(r), type:r.type, body:r.body ?? null, file:fileForMessage(r.file_id ? Number(r.file_id) : null), createdAt:String(r.created_at), editedAt:r.edited_at ?? null, receipts, reactions, clientNonce:r.client_nonce?String(r.client_nonce):null };
 }
 
-export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null): MessageView {
+export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null, clientNonce: string | null = null): MessageView {
+  if(clientNonce){const existing=db.prepare('SELECT id FROM messages WHERE sender_id=? AND client_nonce=?').get(senderId,clientNonce) as any;if(existing)return messageById(Number(existing.id))!;}
   const file = fileId ? (db.prepare('SELECT mime_type FROM files WHERE id=? AND owner_id=?').get(fileId, senderId) as any) : null;
   if (fileId && !file) throw new Error('invalid_file');
   const type = file ? (String(file.mime_type).startsWith('image/') ? 'image' : 'file') : 'text';
-  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id) VALUES(?,?,?,?,?)').run(conversationId,senderId,type,body?.trim() || null,fileId);
+  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id,client_nonce) VALUES(?,?,?,?,?,?)').run(conversationId,senderId,type,body?.trim() || null,fileId,clientNonce);
   const messageId = Number(info.lastInsertRowid);
   for (const uid of conversationMemberIds(conversationId)) {
     db.prepare('INSERT OR IGNORE INTO message_receipts(message_id,user_id) VALUES(?,?)').run(messageId,uid);
@@ -248,6 +266,14 @@ export function history(conversationId: number, beforeId: number | null, limit =
     ? db.prepare('SELECT id FROM messages WHERE conversation_id=? AND id<? ORDER BY id DESC LIMIT ?').all(conversationId,beforeId,limit)
     : db.prepare('SELECT id FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT ?').all(conversationId,limit);
   return (rows as any[]).reverse().map(r => messageById(Number(r.id))!);
+}
+
+export function toggleReaction(messageId:number,userId:number,emoji:string): {emoji:string; userIds:number[]}[] {
+  const clean=emoji.trim().slice(0,16); if(!clean) throw new Error('invalid_reaction');
+  const exists=db.prepare('SELECT 1 FROM message_reactions WHERE message_id=? AND user_id=? AND emoji=?').get(messageId,userId,clean);
+  if(exists) db.prepare('DELETE FROM message_reactions WHERE message_id=? AND user_id=? AND emoji=?').run(messageId,userId,clean);
+  else db.prepare('INSERT INTO message_reactions(message_id,user_id,emoji) VALUES(?,?,?)').run(messageId,userId,clean);
+  return messageById(messageId)?.reactions ?? [];
 }
 
 export function markReceipt(messageId: number, userId: number, kind: 'delivered'|'read'): void {

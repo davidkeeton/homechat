@@ -10,7 +10,7 @@ A small self-hosted household messenger with a built-in web client. HomeChat is 
 - Group details with rename, member list, add/remove member and leave-group controls
 - Flyout closes on Escape, conversation change, or when returning to the chat
 
-## v0.6 features
+## v0.7 features
 
 - Direct messages and group chats
 - **HID**: permanent public hexadecimal identity such as `7A3F-19C2-B84D`
@@ -104,3 +104,13 @@ Back up that directory to preserve users, messages and files.
 ## Current scope
 
 HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end encryption, Internet-scale abuse controls, native mobile push notifications, or voice/video calling.
+
+## v0.7 interaction/responsiveness pass
+
+- Optimistic local echo for outgoing messages with **Sending…**, failure state, and retry.
+- Idempotent client nonces prevent duplicate messages when a retry races a lost acknowledgement.
+- Emoji reactions with quick reactions and live updates across clients.
+- Copy-text action on messages.
+- Local unread-count reconciliation for active/inactive conversations without a full conversation refresh.
+- In-memory authenticated attachment object-URL cache so scrolling does not repeatedly download the same media.
+- No forwarding; message forwarding remains intentionally out of scope.

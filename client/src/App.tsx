@@ -16,6 +16,9 @@ const URL_RE = /https?:\/\/[^\s<>'"`]+/gi;
 type Session = { token:string; user:User };
 type Lightbox = { url:string; name:string } | null;
 type InventoryTab = 'media'|'files'|'links';
+type UiMessage = Message & { sendState?:'sending'|'failed'; temp?:boolean; localFileUrl?:string; retry?:{body?:string;fileId?:number;clientNonce:string;file?:File} };
+const fileUrlCache=new Map<string,string>();
+const fileUrlPending=new Map<string,Promise<string>>();
 
 function initials(name:string){ return name.trim().split(/\s+/).slice(0,2).map(x=>x[0]?.toUpperCase()).join('') || '?'; }
 function fmtTime(ts:string){ const d=new Date(ts); return d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}); }
@@ -45,13 +48,14 @@ function Login({onLogin}:{onLogin:(s:Session)=>void}){
 }
 
 function useFileUrl(client:HomeClient,file?:FileView|null){
-  const [url,setUrl]=useState('');
-  useEffect(()=>{let alive=true;let object='';if(file){client.fileBlob(file.id).then(b=>{if(alive){object=URL.createObjectURL(b);setUrl(object);}}).catch(()=>{});}return()=>{alive=false;if(object)URL.revokeObjectURL(object);};},[client,file?.id]);
+  const key=file?`${client.baseUrl}:${file.id}`:'';
+  const [url,setUrl]=useState(()=>key?fileUrlCache.get(key)||'':'');
+  useEffect(()=>{let alive=true;if(!file||file.id<=0){setUrl('');return;}const cached=fileUrlCache.get(key);if(cached){setUrl(cached);return;}let pending=fileUrlPending.get(key);if(!pending){pending=client.fileBlob(file.id).then(b=>{const object=URL.createObjectURL(b);fileUrlCache.set(key,object);fileUrlPending.delete(key);return object;}).catch(e=>{fileUrlPending.delete(key);throw e;});fileUrlPending.set(key,pending);}pending.then(x=>alive&&setUrl(x)).catch(()=>{});return()=>{alive=false};},[client,key,file?.id]);
   return url;
 }
 
-function Attachment({client,message}:{client:HomeClient;message:Message}){
-  const url=useFileUrl(client,message.file); const [lightbox,setLightbox]=useState<Lightbox>(null);
+function Attachment({client,message}:{client:HomeClient;message:UiMessage}){
+  const fetched=useFileUrl(client,message.file); const url=message.localFileUrl||fetched; const [lightbox,setLightbox]=useState<Lightbox>(null);
   if(!message.file) return null;
   if(message.file.mimeType.startsWith('audio/')) return <div className="attachment audio"><span className="voice-label">🎤 Voice message</span><audio controls preload="metadata" src={url}/></div>;
   if(message.file.mimeType.startsWith('video/')) return <div className="attachment video"><video controls preload="metadata" src={url}/><span>{message.file.name}</span></div>;
@@ -172,7 +176,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const [users,setUsers]=useState<User[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const [activeId,setActiveId]=useState<number|null>(null);
-  const [messages,setMessages]=useState<Record<number,Message[]>>({});
+  const [messages,setMessages]=useState<Record<number,UiMessage[]>>({});
   const [hasMore,setHasMore]=useState<Record<number,boolean>>({});
   const [loadingOlder,setLoadingOlder]=useState<Record<number,boolean>>({});
   const [unreadStart,setUnreadStart]=useState<Record<number,number|undefined>>({});
@@ -206,6 +210,8 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const recordChunksRef=useRef<Blob[]>([]);
   const recordTimerRef=useRef<number|undefined>(undefined);
   const toastIdRef=useRef(1);
+  const tempIdRef=useRef(-1);
+  const [reactionPicker,setReactionPicker]=useState<number|null>(null);
   const active=conversations.find(c=>c.id===activeId)||null;
 
   function toast(text:string,kind:'error'|'info'='error'){
@@ -266,8 +272,10 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   function conversationOnline(c:Conversation){return !c.isSelf&&c.type==='direct'&&c.members.some(m=>m.id!==me.id&&online.has(m.id));}
   function conversationSubline(c:Conversation){if(c.isSelf)return 'Private notes & files';if(c.type==='group')return `${c.members.length} members`;return conversationOnline(c)?'online':'offline';}
   function typingNames(c:Conversation|null){if(!c)return '';const ids=[...(typing[c.id]||new Set())];return ids.map(id=>users.find(u=>u.id===id)?.displayName).filter(Boolean).join(', ');}
-  function receiptView(m:Message,c:Conversation){
+  function receiptView(m:UiMessage,c:Conversation){
     if(m.sender.id!==me.id||c.isSelf)return null;
+    if(m.sendState==='sending')return <span className="receipt pending">Sending…</span>;
+    if(m.sendState==='failed')return <span className="receipt failed">Failed</span>;
     const others=m.receipts.filter(r=>r.userId!==me.id);
     if(!others.length)return null;
     const read=others.filter(r=>r.readAt).length;const delivered=others.filter(r=>r.deliveredAt||r.readAt).length;
@@ -299,12 +307,14 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     socket.on('presence:update',(p:{userId:number;online:boolean})=>setOnline(s=>{const n=new Set(s);p.online?n.add(p.userId):n.delete(p.userId);return n;}));
     socket.on('typing:update',(p:{conversationId:number;userId:number;typing:boolean})=>setTyping(t=>{const n={...t};const set=new Set(n[p.conversationId]||[]);p.typing?set.add(p.userId):set.delete(p.userId);n[p.conversationId]=set;return n;}));
     socket.on('receipt:update',(p:{messageId:number;userId:number;kind:'delivered'|'read'})=>setMessages(all=>{const next={...all};for(const [cid,list] of Object.entries(next)){if(!list.some(m=>m.id===p.messageId))continue;next[Number(cid)]=list.map(m=>{if(m.id!==p.messageId)return m;const now=new Date().toISOString();const receipts=[...(m.receipts||[])];const i=receipts.findIndex(r=>r.userId===p.userId);const current=i>=0?receipts[i]:{userId:p.userId,deliveredAt:null,readAt:null};const updated=p.kind==='read'?{...current,deliveredAt:current.deliveredAt||now,readAt:now}:{...current,deliveredAt:now};if(i>=0)receipts[i]=updated;else receipts.push(updated);return {...m,receipts};});break;}return next;}));
+    socket.on('reaction:update',(p:{messageId:number;reactions:Message['reactions']})=>setMessages(all=>{const next={...all};for(const [cid,list] of Object.entries(next)){if(list.some(m=>m.id===p.messageId)){next[Number(cid)]=list.map(m=>m.id===p.messageId?{...m,reactions:p.reactions}:m);break;}}return next;}));
     socket.on('message:new',(m:Message)=>{
       const shouldFollow=m.conversationId===activeIdRef.current&&isNearBottom();
-      setMessages(all=>({...all,[m.conversationId]:[...(all[m.conversationId]||[]).filter(x=>x.id!==m.id),m]}));
-      if(m.sender.id!==me.id){client.receipt(m.id,'delivered');if(m.conversationId===activeIdRef.current&&!document.hidden)client.receipt(m.id,'read');notifyIncoming(m);}
+      setMessages(all=>{const list=all[m.conversationId]||[];let oldLocal:UiMessage|undefined;const kept=list.filter(x=>{const same=x.id===m.id||Boolean(m.clientNonce&&x.clientNonce===m.clientNonce);if(same&&x.temp)oldLocal=x;return !same;});if(oldLocal?.localFileUrl)URL.revokeObjectURL(oldLocal.localFileUrl);return {...all,[m.conversationId]:[...kept,m]};});
+      const visible=m.conversationId===activeIdRef.current&&!document.hidden;
+      setConversations(cs=>{const found=cs.find(c=>c.id===m.conversationId);if(!found)return cs;const updated={...found,lastMessage:m,unreadCount:m.sender.id!==me.id&&!visible?found.unreadCount+1:0};return [updated,...cs.filter(c=>c.id!==m.conversationId)];});
+      if(m.sender.id!==me.id){client.receipt(m.id,'delivered');if(visible)client.receipt(m.id,'read');notifyIncoming(m);}
       if(shouldFollow||m.sender.id===me.id)scrollBottom('smooth');
-      refresh().catch(e=>toast(errorText(e,'Could not refresh conversation list.')));
     });
     return()=>{socket.off();manager.off('reconnect_attempt',reconnecting);manager.off('reconnect_failed',failed);client.disconnect();};
   },[client]);
@@ -314,14 +324,25 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const filtered=conversations.filter(c=>conversationName(c).toLowerCase().includes(search.toLowerCase()));
 
   function queueFile(file:File){if(file.size>100*1024*1024){toast('File is larger than 100 MB.');return;}setPendingFile(file);}
-  async function send(){
-    const body=text.trim();if(!activeId||(!body&&!pendingFile)||uploading)return;
-    if(connection!=='connected'){toast('HomeChat is offline. Wait for it to reconnect.');return;}
-    setUploading(true);
-    try{let fileId:number|undefined;if(pendingFile){const uploaded=await client.upload(pendingFile);fileId=uploaded.id;}await client.send(activeId,body||undefined,fileId);setText('');setPendingFile(null);client.typing(activeId,false);}
-    catch(e){toast(errorText(e,'Message could not be sent.'));}
+  async function deliverOptimistic(tempId:number,cid:number,body:string,file:File|null,clientNonce:string,fileId?:number){
+    let resolvedFileId=fileId;
+    try{
+      if(file&&!resolvedFileId){setUploading(true);const uploaded=await client.upload(file);resolvedFileId=uploaded.id;setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId?{...m,retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file}}:m)}));}
+      const sent=await client.send(cid,body||undefined,resolvedFileId,clientNonce);
+      setMessages(all=>{const list=all[cid]||[];const local=list.find(m=>m.id===tempId||m.clientNonce===clientNonce);if(local?.localFileUrl)URL.revokeObjectURL(local.localFileUrl);return {...all,[cid]:[...list.filter(m=>m.id!==tempId&&m.clientNonce!==clientNonce&&m.id!==sent.id),sent]};});
+    }catch(e){setMessages(all=>({...all,[cid]:(all[cid]||[]).map(m=>m.id===tempId||m.clientNonce===clientNonce?{...m,sendState:'failed',retry:{body:body||undefined,fileId:resolvedFileId,clientNonce,file:file||undefined}}:m)}));toast(errorText(e,'Message could not be sent.'));}
     finally{setUploading(false);if(fileRef.current)fileRef.current.value='';}
   }
+  async function send(){
+    const body=text.trim();if(!activeId||(!body&&!pendingFile))return;
+    if(connection!=='connected'){toast('HomeChat is offline. Wait for it to reconnect.');return;}
+    const cid=activeId;const file=pendingFile;const clientNonce=crypto.randomUUID();const tempId=tempIdRef.current--;const localFileUrl=file?URL.createObjectURL(file):undefined;
+    const optimistic:UiMessage={id:tempId,conversationId:cid,sender:me,type:file?(file.type.startsWith('image/')?'image':'file'):'text',body:body||null,file:file?{id:tempId,name:file.name,mimeType:file.type||'application/octet-stream',size:file.size,url:''}:null,createdAt:new Date().toISOString(),editedAt:null,receipts:[],reactions:[],clientNonce,sendState:'sending',temp:true,localFileUrl,retry:{body:body||undefined,clientNonce,file:file||undefined}};
+    setMessages(all=>({...all,[cid]:[...(all[cid]||[]),optimistic]}));setText('');setPendingFile(null);client.typing(cid,false);scrollBottom('smooth');
+    void deliverOptimistic(tempId,cid,body,file,clientNonce);
+  }
+  function retryMessage(m:UiMessage){if(!m.retry||connection!=='connected')return;setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?{...x,sendState:'sending'}:x)}));void deliverOptimistic(m.id,m.conversationId,m.retry.body||'',m.retry.file||null,m.retry.clientNonce,m.retry.fileId);}
+  async function toggleReaction(m:UiMessage,emoji:string){if(m.id<=0)return;try{const reactions=await client.reaction(m.id,emoji);setMessages(all=>({...all,[m.conversationId]:(all[m.conversationId]||[]).map(x=>x.id===m.id?{...x,reactions}:x)}));setReactionPicker(null);}catch(e){toast(errorText(e,'Could not update reaction.'));}}
   function onText(v:string){setText(v);if(!activeId||connection!=='connected')return;client.typing(activeId,true);window.clearTimeout(typingTimer.current);typingTimer.current=window.setTimeout(()=>client.typing(activeId,false),1200);}
   function onPaste(e:React.ClipboardEvent<HTMLTextAreaElement>){const item=[...e.clipboardData.items].find(x=>x.type.startsWith('image/'));if(!item)return;const blob=item.getAsFile();if(!blob)return;e.preventDefault();const ext=blob.type.split('/')[1]?.replace('jpeg','jpg')||'png';queueFile(new File([blob],`clipboard-${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`,{type:blob.type}));}
   async function direct(u:User){try{const {id}=await client.createDirect(u.id);await refresh();setActiveId(id);setNewChat(false);}catch(e){toast(errorText(e,'Could not create conversation.'));}}
@@ -354,7 +375,13 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
       const dk=dayKey(m.createdAt);
       if(dk!==previousDay){nodes.push(<div className="date-separator" key={`date-${m.id}`}><span>{dayLabel(m.createdAt)}</span></div>);previousDay=dk;}
       if(unreadId===m.id)nodes.push(<div className="unread-divider" key={`unread-${m.id}`}><span>Unread messages</span></div>);
-      nodes.push(<div className={'message-row '+(m.sender.id===me.id?'mine':'theirs')} key={m.id}><div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&<b className="sender-name">{m.sender.displayName}</b>}{m.body&&<MessageBody client={client} body={m.body}/>}<Attachment client={client} message={m}/><span className="stamp">{fmtTime(m.createdAt)}{receiptView(m,c)}</span></div></div>);
+      nodes.push(<div className={'message-row '+(m.sender.id===me.id?'mine':'theirs')+(m.sendState==='failed'?' failed-message':'')} key={m.id}>
+        <div className="message-actions">{m.id>0&&<button title="React" onClick={()=>setReactionPicker(reactionPicker===m.id?null:m.id)}>☺</button>}{m.body&&<button title="Copy message" onClick={()=>void copyText(m.body!,'Message')}>⧉</button>}</div>
+        <div className="bubble">{c.type==='group'&&m.sender.id!==me.id&&<b className="sender-name">{m.sender.displayName}</b>}{m.body&&<MessageBody client={client} body={m.body}/>}<Attachment client={client} message={m}/>
+          {m.reactions?.length>0&&<div className="reactions">{m.reactions.map(r=><button key={r.emoji} className={r.userIds.includes(me.id)?'mine':''} title={`${r.userIds.length} reaction${r.userIds.length===1?'':'s'}`} onClick={()=>void toggleReaction(m,r.emoji)}>{r.emoji} <span>{r.userIds.length}</span></button>)}</div>}
+          {reactionPicker===m.id&&m.id>0&&<div className="reaction-picker">{['👍','❤️','😂','😮','😢','🎉'].map(e=><button key={e} onClick={()=>void toggleReaction(m,e)}>{e}</button>)}</div>}
+          <span className="stamp">{fmtTime(m.createdAt)}{receiptView(m,c)}{m.sendState==='failed'&&<button className="retry-send" onClick={()=>retryMessage(m)}>Retry</button>}</span>
+        </div></div>);
     }
     return nodes;
   }
