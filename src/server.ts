@@ -16,9 +16,10 @@ import {
   acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
   deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setDisplayName, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
-  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists
+  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists, upsertPushSubscription, deletePushSubscription, pruneStalePushSubscriptions
 } from './db.js';
-import type { LinkPreview } from './types.js';
+import type { LinkPreview, MessageView } from './types.js';
+import { sendPushToUser, vapidPublicKey } from './push.js';
 
 
 function bootstrapAdminFromEnvironment(): void {
@@ -91,6 +92,19 @@ app.post('/api/auth/login',(req,res)=>{
   res.json({token:createSession(user.id),user});
 });
 app.post('/api/auth/logout',requireAuth,(req,res)=>{ revokeToken(req.token!); res.status(204).end(); });
+app.get('/api/push/config',requireAuth,(_req,res)=>res.json({publicKey:vapidPublicKey()}));
+app.post('/api/push/subscriptions',requireAuth,(req,res)=>{
+  try{
+    upsertPushSubscription(req.user!.id,req.token!,{
+      endpoint:req.body?.endpoint,p256dh:req.body?.keys?.p256dh,auth:req.body?.keys?.auth,
+      deviceId:req.body?.deviceId,userAgent:req.headers['user-agent']??''
+    });
+    res.status(204).end();
+  }catch(e:any){res.status(400).json({error:e?.message||'invalid_push_subscription'});}
+});
+app.delete('/api/push/subscriptions',requireAuth,(req,res)=>{
+  deletePushSubscription(req.user!.id,String(req.body?.endpoint??''));res.status(204).end();
+});
 app.get('/api/me',requireAuth,(req,res)=>res.json(req.user));
 app.patch('/api/me',requireAuth,(req,res)=>{try{res.json(setDisplayName(req.user!.id,String(req.body?.displayName??'')));}catch(e:any){const code=e?.message==='display_name_exists'?409:e?.message==='not_found'?404:400;res.status(code).json({error:e?.message||'invalid_display_name'});}});
 app.get('/api/users',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.id,'').map(({relationship,...user})=>user)));
@@ -178,6 +192,25 @@ app.post('/api/conversations/direct',requireAuth,(req,res)=>{
   if(!canMessageUser(req.user!.id,otherId)) return res.status(403).json({error:'dm_not_allowed'});
   const id=findOrCreateDirect(req.user!.id,otherId); res.status(201).json({id});
 });
+function pushPreview(message:MessageView):string{
+  if(message.deletedAt)return 'Message deleted';
+  if(message.file?.mimeType.startsWith('audio/'))return 'Voice message';
+  if(message.file?.mimeType.startsWith('video/'))return 'Video';
+  if(message.type==='image')return 'Photo';
+  if(message.type==='file')return message.file?.name?`Attachment: ${message.file.name}`:'Attachment';
+  const text=String(message.body??'').replace(/\s+/g,' ').trim();
+  return text.length>180?`${text.slice(0,177)}…`:text||'New message';
+}
+function queuePushForMessage(message:MessageView):void{
+  const members=conversationMemberIds(message.conversationId);
+  const group=members.length>2;
+  for(const uid of members){
+    if(uid===message.sender.id)continue;
+    const title=group?`HomeChat · ${message.sender.displayName}`:message.sender.displayName;
+    void sendPushToUser(uid,{title,body:pushPreview(message),conversationId:message.conversationId,messageId:message.id,senderId:message.sender.id},activeDeviceIds(uid)).catch(error=>console.warn('HomeChat push queue failed:',error));
+  }
+}
+
 app.post('/api/conversations/:id/messages',requireAuth,(req,res)=>{
   const cid=Number(req.params.id);
   const body=typeof req.body?.body==='string'?req.body.body:null;
@@ -191,6 +224,7 @@ app.post('/api/conversations/:id/messages',requireAuth,(req,res)=>{
   try{
     const message=createMessage(cid,req.user!.id,body,fileId,clientNonce,replyToId);
     for(const uid of conversationMemberIds(cid)) io.to(roomForUser(uid)).emit('message:new',message);
+    queuePushForMessage(message);
     res.status(201).json(message);
   }catch(e:any){
     res.status(400).json({error:e?.message||'send_failed'});
@@ -343,18 +377,23 @@ const server=tlsReady
   : null;
 const io=new SocketServer(server ?? http.createServer(),{cors:{origin:true,credentials:true}});
 const online=new Map<number,number>();
+const onlineDevices=new Map<number,Map<string,number>>();
 function roomForUser(id:number){return `user:${id}`;}
+function activeDeviceIds(userId:number):Set<string>{return new Set(onlineDevices.get(userId)?.keys()??[]);}
+function trackDevice(userId:number,deviceId:string,delta:1|-1){if(!deviceId)return;const devices=onlineDevices.get(userId)??new Map<string,number>();const next=(devices.get(deviceId)??0)+delta;if(next>0)devices.set(deviceId,next);else devices.delete(deviceId);if(devices.size)onlineDevices.set(userId,devices);else onlineDevices.delete(userId);}
 function broadcastPresence(userId:number,isOnline:boolean){for(const viewer of listUsers())if(canSeePresence(viewer.id,userId))io.to(roomForUser(viewer.id)).emit('presence:update',{userId,online:isOnline});}
 function syncPresenceVisibility(userId:number){for(const viewer of listUsers())io.to(roomForUser(viewer.id)).emit('presence:update',{userId,online:online.has(userId)&&canSeePresence(viewer.id,userId)});}
 
 io.use((socket,next)=>{
   const token=String(socket.handshake.auth?.token ?? socket.handshake.headers.authorization?.toString().replace(/^Bearer\s+/,'') ?? '');
   const user=userFromToken(token); if(!user) return next(new Error('unauthorized'));
-  socket.data.user=user; next();
+  socket.data.user=user; socket.data.deviceId=String(socket.handshake.auth?.deviceId??'').slice(0,128); next();
 });
 io.on('connection',(socket)=>{
   const user=socket.data.user as {id:number};
+  const deviceId=String(socket.data.deviceId??'');
   socket.join(roomForUser(user.id));
+  trackDevice(user.id,deviceId,1);
   const count=(online.get(user.id)??0)+1; online.set(user.id,count); if(count===1) broadcastPresence(user.id,true);
   socket.emit('presence:snapshot',{userIds:[...online.keys()].filter(id=>canSeePresence(user.id,id))});
 
@@ -371,6 +410,7 @@ io.on('connection',(socket)=>{
     try {
       const message=createMessage(cid,user.id,body,fileId,clientNonce,replyToId);
       for(const uid of conversationMemberIds(cid)) io.to(roomForUser(uid)).emit('message:new',message);
+      queuePushForMessage(message);
       ack?.({ok:true,message});
     } catch { ack?.({ok:false,error:'send_failed'}); }
   });
@@ -402,13 +442,14 @@ io.on('connection',(socket)=>{
     markReceipt(mid,user.id,kind);
     for(const uid of conversationMemberIds(m.conversationId)) if(uid!==user.id) io.to(roomForUser(uid)).emit('receipt:update',{messageId:mid,userId:user.id,kind});
   });
-  socket.on('disconnect',()=>{
+  socket.on('disconnect',()=>{trackDevice(user.id,deviceId,-1);
     const next=Math.max(0,(online.get(user.id)??1)-1); if(next===0){online.delete(user.id);broadcastPresence(user.id,false);} else online.set(user.id,next);
   });
 });
 
 function cleanupStorage(): void {
   pruneExpiredSessions();
+pruneStalePushSubscriptions();
   const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
   pruneOrphanFiles(cutoff);
 }

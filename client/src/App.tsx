@@ -20,6 +20,10 @@ import {
 
 const BASE_URL = window.location.origin;
 const URL_RE = /https?:\/\/[^\s<>'"`]+/gi;
+const DEVICE_ID=(()=>{const key='homechat.deviceId';let id=localStorage.getItem(key);if(!id){id=crypto.randomUUID();localStorage.setItem(key,id);}return id;})();
+function isIos(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
+function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||Boolean((navigator as any).standalone);}
+function base64UrlToBytes(value:string){const pad='='.repeat((4-value.length%4)%4);const b64=(value+pad).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(b64);return Uint8Array.from(raw,c=>c.charCodeAt(0));}
 
 type Session = { token:string; user:User };
 type Lightbox = { url:string; name:string } | null;
@@ -229,7 +233,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   type ConnectionState='connected'|'reconnecting'|'offline';
   type Toast={id:number;text:string;kind:'error'|'info'};
   const PAGE_SIZE=50;
-  const client=useMemo(()=>new HomeClient(BASE_URL,session.token),[session.token]);
+  const client=useMemo(()=>new HomeClient(BASE_URL,session.token,DEVICE_ID),[session.token]);
   const [me,setMe]=useState(session.user);
   const [users,setUsers]=useState<User[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
@@ -254,6 +258,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const [pendingFile,setPendingFile]=useState<File|null>(null);
   const [pendingUrl,setPendingUrl]=useState<string>('');
   const [notificationPermission,setNotificationPermission]=useState<NotificationPermission>(()=>typeof Notification==='undefined'?'denied':Notification.permission);
+  const [pushSubscribed,setPushSubscribed]=useState(false);
   const [serviceConfig,setServiceConfig]=useState<PublicServiceConfig|null>(null);
   const [drawer,setDrawer]=useState<{view:'details'|'media'|'files'|'links';target:'me'|'conversation'}|null>(null);
   const [recording,setRecording]=useState(false);
@@ -369,11 +374,32 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   }
 
   function beep(){try{const Ctx=window.AudioContext||(window as any).webkitAudioContext;if(!Ctx)return;const ctx=audioRef.current??new Ctx();audioRef.current=ctx;if(ctx.state==='suspended')void ctx.resume();const osc=ctx.createOscillator();const gain=ctx.createGain();osc.frequency.value=680;gain.gain.setValueAtTime(.045,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.16);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.17);}catch{}}
-  async function enableNotifications(){try{beep();if(typeof Notification==='undefined'){toast('Notifications are not supported by this browser.');return;}const p=await Notification.requestPermission();setNotificationPermission(p);if(p!=='granted')toast('Notifications were not enabled.','info');}catch(e){toast(errorText(e,'Could not enable notifications.'));}}
-  function notifyIncoming(m:Message){const c=conversationsRef.current.find(x=>x.id===m.conversationId);const isVisible=!document.hidden&&activeIdRef.current===m.conversationId;if(isVisible)return;beep();if(typeof Notification!=='undefined'&&Notification.permission==='granted'){const title=c?conversationName(c):m.sender.displayName;const body=previewText(m);const n=new Notification(title,{body,tag:`homechat-${m.conversationId}`});n.onclick=()=>{window.focus();setActiveId(m.conversationId);n.close();};}}
+  async function currentPushSubscription(){if(!('serviceWorker'in navigator)||!('PushManager'in window))return null;const reg=await navigator.serviceWorker.ready;return reg.pushManager.getSubscription();}
+  async function registerPushSubscription(subscription:PushSubscription){const json=subscription.toJSON();if(!json.endpoint||!json.keys?.p256dh||!json.keys?.auth)throw new Error('Browser returned an incomplete push subscription.');await client.savePushSubscription({endpoint:json.endpoint,keys:{p256dh:json.keys.p256dh,auth:json.keys.auth},deviceId:DEVICE_ID});setPushSubscribed(true);}
+  async function syncExistingPushSubscription(){try{const sub=await currentPushSubscription();if(!sub){setPushSubscribed(false);return;}await registerPushSubscription(sub);}catch{setPushSubscribed(false);}}
+  async function enableNotifications(){
+    try{
+      beep();
+      if(!window.isSecureContext||typeof Notification==='undefined'||!('serviceWorker'in navigator)||!('PushManager'in window)){toast('Background notifications are not supported by this browser.');return;}
+      if(isIos()&&!isStandalone()){toast('On iPhone/iPad, add HomeChat to the Home Screen first, then enable notifications from the installed app.','info');return;}
+      const permission=Notification.permission==='granted'?'granted':await Notification.requestPermission();setNotificationPermission(permission);
+      if(permission!=='granted'){setPushSubscribed(false);toast('Notifications were not enabled.','info');return;}
+      const cfg=await client.pushConfig();
+      const reg=await navigator.serviceWorker.ready;
+      let sub=await reg.pushManager.getSubscription();
+      const expected=base64UrlToBytes(cfg.publicKey);const current=sub?.options.applicationServerKey?new Uint8Array(sub.options.applicationServerKey):null;
+      const matches=current&&current.length===expected.length&&current.every((v,i)=>v===expected[i]);
+      if(sub&&!matches){await sub.unsubscribe();sub=null;}
+      sub=sub??await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:expected});
+      await registerPushSubscription(sub);
+      toast('Background notifications enabled.','info');
+    }catch(e){setPushSubscribed(false);toast(errorText(e,'Could not enable background notifications.'));}
+  }
+  async function notifyIncoming(m:Message){const c=conversationsRef.current.find(x=>x.id===m.conversationId);const isVisible=!document.hidden&&activeIdRef.current===m.conversationId;if(isVisible)return;beep();if(typeof Notification!=='undefined'&&Notification.permission==='granted'){const title=c?conversationName(c):m.sender.displayName;const body=previewText(m);try{const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,tag:`homechat-${m.conversationId}`,icon:'/icons/homechat-192.png',data:{conversationId:m.conversationId,url:`/?conversation=${m.conversationId}`}});}catch{}}}
 
   useEffect(()=>{
     refresh().catch(e=>{if(e instanceof ApiError&&e.status===401){onLogout();return;}toast(errorText(e,'Could not refresh HomeChat.'));});
+    if(typeof Notification!=='undefined'&&Notification.permission==='granted')void syncExistingPushSubscription();
     const socket=client.connect();
     const manager=socket.io;
     const connected=()=>setConnection('connected');
@@ -394,10 +420,16 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
       setMessages(all=>{const list=all[m.conversationId]||[];let oldLocal:UiMessage|undefined;const kept=list.filter(x=>{const same=x.id===m.id||Boolean(m.clientNonce&&x.clientNonce===m.clientNonce);if(same&&x.temp)oldLocal=x;return !same;});if(oldLocal?.localFileUrl)URL.revokeObjectURL(oldLocal.localFileUrl);return {...all,[m.conversationId]:[...kept,m]};});
       const visible=m.conversationId===activeIdRef.current&&!document.hidden;
       setConversations(cs=>{const found=cs.find(c=>c.id===m.conversationId);if(!found)return cs;const updated={...found,lastMessage:m,unreadCount:m.sender.id!==me.id&&!visible?found.unreadCount+1:0};return [updated,...cs.filter(c=>c.id!==m.conversationId)];});
-      if(m.sender.id!==me.id){client.receipt(m.id,'delivered');if(visible)client.receipt(m.id,'read');notifyIncoming(m);}
+      if(m.sender.id!==me.id){client.receipt(m.id,'delivered');if(visible)client.receipt(m.id,'read');void notifyIncoming(m);}
       if(shouldFollow||m.sender.id===me.id)scrollBottom('smooth');
     });
     return()=>{socket.off();manager.off('reconnect_attempt',reconnecting);manager.off('reconnect_failed',failed);client.disconnect();};
+  },[client]);
+  useEffect(()=>{
+    function onServiceWorkerMessage(event:MessageEvent){const data=event.data;if(!data)return;if(data.type==='homechat:push-received'){void refresh().catch(()=>{});return;}if(data.type!=='homechat:open-conversation')return;const cid=Number(data.conversationId);if(!cid)return;activeIdRef.current=cid;setActiveId(cid);void refresh().catch(()=>{});window.history.replaceState({},'',window.location.pathname);}
+    navigator.serviceWorker?.addEventListener('message',onServiceWorkerMessage);
+    const requested=Number(new URLSearchParams(window.location.search).get('conversation')||0);if(requested){activeIdRef.current=requested;setActiveId(requested);void refresh().finally(()=>window.history.replaceState({},'',window.location.pathname));}
+    return()=>navigator.serviceWorker?.removeEventListener('message',onServiceWorkerMessage);
   },[client]);
   useEffect(()=>{if(activeId){void loadMessages(activeId);setPendingFile(null);}},[activeId]);
   useEffect(()=>{
@@ -461,6 +493,12 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   async function direct(u:User){try{const {id}=await client.createDirect(u.id);await refresh();setActiveId(id);setNewChat(false);}catch(e){toast(errorText(e,'Could not create conversation.'));}}
   async function saved(){try{const {id}=await client.savedMessages();await refresh();setActiveId(id);setNewChat(false);}catch(e){toast(errorText(e,'Could not open Saved Messages.'));}}
   async function group(name:string,ids:number[]){try{const {id}=await client.createGroup(name,ids);await refresh();setActiveId(id);setNewChat(false);}catch(e){toast(errorText(e,'Could not create group.'));}}
+  async function logout(){
+    let sub:PushSubscription|null=null;try{sub=await currentPushSubscription();}catch{}
+    let serverLoggedOut=false;try{await client.logout();serverLoggedOut=true;}catch{}
+    if(!serverLoggedOut&&sub){try{await sub.unsubscribe();}catch{}}
+    onLogout();
+  }
   async function changeDisplayName(name:string){try{const user=await client.setDisplayName(name);setMe(user);onSessionChange({token:session.token,user});await refresh();toast('Display name updated.','info');}catch(e:any){toast(e?.code==='display_name_exists'?'That display name is already in use.':errorText(e,'Could not update display name.'));}}
   async function changeAvatar(file:File){if(!file.type.startsWith('image/')){toast('Choose an image for your avatar.');return;}try{const user=await client.uploadAvatar(file);setMe(user);onSessionChange({token:session.token,user});await refresh();}catch(e){toast(errorText(e,'Could not update avatar.'));}finally{if(avatarRef.current)avatarRef.current.value='';}}
   async function copyText(value:string,label:string){try{await navigator.clipboard.writeText(value);toast(`${label} copied.`,'info');}catch{toast(`Could not copy ${label.toLowerCase()}.`);}}
@@ -512,7 +550,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   return <div className="app-shell" onClick={()=>{if(audioRef.current?.state==='suspended')void audioRef.current.resume();}}>
     {connection!=='connected'&&<div className={`connection-pill ${connection}`}>{connection==='reconnecting'?'Reconnecting…':'Offline'}</div>}
     <aside className="sidebar">
-      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>{me.hid}</small></div></div><div className="top-actions"><button title="Command palette (Ctrl+K)" onClick={()=>setCommandOpen(true)}>⌘</button><button title="Contacts & directory" onClick={()=>setContactsOpen(true)}>☷</button><button title={notificationPermission==='granted'?'Notifications enabled':'Enable notifications'} className={notificationPermission==='granted'?'enabled':''} onClick={()=>void enableNotifications()}>{notificationPermission==='granted'?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Administration" onClick={()=>setAdmin(true)}>⚙</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={onLogout}>↪</button></div></div>
+      <div className="sidebar-top"><div className="me profile-trigger" onClick={()=>setDrawer({view:'details',target:'me'})}><input ref={avatarRef} hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)void changeAvatar(f)}}/><Avatar name={me.displayName} avatarUrl={me.avatarUrl} online/><div><strong>{me.displayName}</strong><small>{me.hid}</small></div></div><div className="top-actions"><button title="Command palette (Ctrl+K)" onClick={()=>setCommandOpen(true)}>⌘</button><button title="Contacts & directory" onClick={()=>setContactsOpen(true)}>☷</button><button title={pushSubscribed?'Background notifications enabled':notificationPermission==='denied'?'Notifications blocked':'Enable background notifications'} className={pushSubscribed?'enabled':''} onClick={()=>void enableNotifications()}>{pushSubscribed?'🔔':'🔕'}</button>{me.isAdmin&&<button title="Administration" onClick={()=>setAdmin(true)}>⚙</button>}<button title="New chat" onClick={()=>setNewChat(true)}>✎</button><button title="Log out" onClick={()=>void logout()}>↪</button></div></div>
       <div className="search"><input placeholder="Search conversations" value={search} onChange={e=>setSearch(e.target.value)}/></div>
       <div className="conversation-list">
         {contactRequests.incoming.map(r=><div className="conversation chat-request" key={`request-${r.id}`}><Avatar name={r.sender.displayName} avatarUrl={r.sender.avatarUrl} online={online.has(r.sender.id)}/><div className="conv-main"><div className="conv-line"><strong>{r.sender.displayName}</strong><b className="request-badge">Chat request</b></div><div className="conv-line"><span className="preview">{r.sender.hid} wants to chat</span></div><div className="request-actions"><button onClick={()=>void acceptChatRequest(r.id)}>Accept</button><button className="decline" onClick={()=>void declineChatRequest(r.id)}>Decline</button></div></div></div>)}

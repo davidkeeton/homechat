@@ -2,24 +2,26 @@
 
 HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, and an installable PWA for desktop and mobile.
 
-**Current version:** `0.12.0`
+**Current version:** `0.13.0`
 
 HomeChat is intended for LAN/VPN use. It is not currently designed to be exposed directly to the public Internet.
 
-## What v0.12.0 changes
+## What v0.13.0 changes
 
-v0.12.0 removes host-specific deployment assumptions and makes a fresh installation portable.
+v0.13.0 adds standards-based Web Push on top of the portable v0.12 deployment foundation.
 
-- Docker now uses a managed `homechat-data` volume by default.
-- Host/IP and published ports are configured through `.env`.
-- TLS certificates are generated automatically on first start and persisted with HomeChat data.
-- Existing TLS material is reused; it is not regenerated on every restart.
-- First-admin bootstrap still supports environment variables and now also supports a password file.
-- Service-worker cache names are generated from the application version during the client build.
-- Old HomeChat service-worker caches are removed when a new worker activates.
-- The login screen reports an explicit offline state instead of a generic fetch failure.
+- Push subscriptions are stored per signed-in user and device.
+- VAPID keys are generated once and persisted under HomeChat appdata.
+- Closed/background installed PWAs can receive message notifications through the browser/OS push service.
+- Active Socket.IO devices are excluded from server push to avoid duplicate notifications on the same device.
+- Other subscribed devices can still receive push even when one device is actively connected.
+- Notification clicks focus/open HomeChat and select the relevant conversation.
+- Expired push endpoints are removed automatically when a push service reports them gone.
+- Push subscriptions are invalidated by logout/session expiry, account disable, and password reset.
+- iPhone/iPad users are guided to install HomeChat to the Home Screen before enabling background notifications.
+- The service-worker cache continues to be generated from the package version at build time.
 
-This release does **not** add Web Push yet. Existing in-app/browser notifications continue to work as before while HomeChat is active.
+Existing messages, users, uploads, TLS certificates, and normal Socket.IO delivery are unchanged. Web Push is an additional notification channel, not a replacement for message storage or realtime delivery.
 
 ## Features
 
@@ -42,6 +44,7 @@ This release does **not** add Web Push yet. Existing in-app/browser notification
 - Privacy controls and block list
 - Administration screen
 - Installable PWA for Windows, Android, and iOS
+- Web Push notifications that continue when the installed PWA is closed
 - SQLite persistence
 - Socket.IO realtime updates
 - Docker deployment
@@ -156,9 +159,9 @@ HOMECHAT_DATA_PATH=/srv/homechat
 
 The same Compose file accepts either a Docker named volume or an absolute host path.
 
-## Upgrading an existing v0.11.x installation
+## Upgrading an existing installation
 
-v0.11.x used a host bind mount. To keep using the existing data without copying anything, set that existing path before starting v0.12.0:
+If the existing installation uses a host bind mount, keep using that same path during the v0.13.0 upgrade:
 
 ```env
 HOMECHAT_DATA_PATH=/path/to/your/existing/homechat/appdata
@@ -172,7 +175,7 @@ git pull --ff-only
 docker compose up -d --build
 ```
 
-Do **not** omit `HOMECHAT_DATA_PATH` on the first v0.12.0 start if you expect HomeChat to use an existing bind-mounted database. If it is omitted, Docker creates/uses the new `homechat-data` volume and HomeChat will look like a fresh installation. The old bind-mounted files are not deleted.
+Do **not** omit `HOMECHAT_DATA_PATH` on the first v0.13.0 start if the current installation relies on an existing bind-mounted database. If it is omitted, Docker creates/uses the new `homechat-data` volume and HomeChat will look like a fresh installation. The old bind-mounted files are not deleted.
 
 After confirming the upgrade, you can continue using the bind path indefinitely or migrate the data into the named volume later.
 
@@ -238,6 +241,31 @@ A HomeChat account has:
 
 Display names are unique case-insensitively. The HID remains unchanged if a display name changes.
 
+
+## Background notifications (Web Push)
+
+HomeChat 0.13 adds standards-based Web Push. Messages are still stored in SQLite and delivered through the normal HomeChat API/Socket.IO paths; push is only a notification channel.
+
+When a user enables notifications, the browser creates a per-device push subscription and HomeChat stores the subscription against that signed-in user and device. If that device has an active Socket.IO connection, HomeChat does not also push to the same device. Other subscribed devices can still receive background notifications.
+
+VAPID keys are generated once on first startup and persisted under:
+
+```text
+/app/data/push/vapid.json
+```
+
+Back up this file with the rest of HomeChat appdata. Replacing the VAPID key pair requires clients to create new push subscriptions. The private key must never be committed or exposed.
+
+The optional VAPID contact identity can be configured in `.env`:
+
+```env
+HOMECHAT_VAPID_SUBJECT=mailto:homechat@example.invalid
+```
+
+The HomeChat server needs outbound HTTPS access to browser push services. iPhone and iPad background push requires HomeChat to be added to the Home Screen and notification permission to be requested from the installed web app. iOS/iPadOS 16.4 or later supports this standards-based Web Push model.
+
+Push subscriptions are tied to an authenticated session. Logging out removes the server-side association; the browser subscription can be reused after the next login. If logout happens while the server is unreachable, the client unsubscribes locally so a stale server record cannot continue delivering notifications. Expired/revoked sessions are not eligible for push, and disabling an account or resetting its password removes its stored push subscriptions.
+
 ## Administration
 
 Administrators can:
@@ -275,10 +303,10 @@ Open the HTTPS site in Edge/Chrome and use the browser's **Install app** action.
 
 The client build generates `public/sw.js` from `sw.template.js` using the version in `client/package.json`.
 
-For v0.12.0 the cache name is generated as:
+For v0.13.0 the cache name is generated as:
 
 ```text
-homechat-v0.12.0
+homechat-v0.13.0
 ```
 
 When a new service worker activates, older `homechat-*` caches are removed automatically.
@@ -291,7 +319,7 @@ Current notifications use the browser Notification API when a realtime message r
 
 That means notifications work while the PWA/browser is alive, but a fully suspended or closed PWA cannot currently be awakened for a new message.
 
-Background Web Push (VAPID + push subscriptions + service-worker push handling) is planned separately. It is intentionally not part of the v0.12.0 portability release.
+Background Web Push (VAPID + push subscriptions + service-worker push handling) is planned separately. It is intentionally not part of the v0.13.0 portability release.
 
 ## Offline behavior
 
@@ -320,6 +348,9 @@ The exact Docker volume name may include the Compose project prefix.
 Stop HomeChat before taking a filesystem-level copy of the SQLite database if you want a simple consistent backup.
 
 ## Updating
+
+Upgrading an existing 0.12.x database to 0.13.0 is automatic. HomeChat adds the push-subscription table without resetting users, messages, uploads, sessions, or TLS material. VAPID keys are created separately under the existing appdata directory.
+
 
 ```bash
 git pull --ff-only
@@ -357,15 +388,15 @@ Typical release workflow:
 ```bash
 git status
 git add .
-git commit -m "HomeChat v0.12.0 portable deployment"
+git commit -m "HomeChat v0.13.0 portable deployment"
 git push origin main
 ```
 
 After testing:
 
 ```bash
-git tag -a v0.12.0 -m "HomeChat v0.12.0"
-git push origin v0.12.0
+git tag -a v0.13.0 -m "HomeChat v0.13.0"
+git push origin v0.13.0
 ```
 
 ## Files that must not be committed

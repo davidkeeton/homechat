@@ -33,3 +33,39 @@ self.addEventListener('fetch', event => {
     return cached || network;
   }));
 });
+
+
+self.addEventListener('push', event => {
+  event.waitUntil((async()=>{
+    let payload={title:'HomeChat',body:'New message',conversationId:0};
+    try{if(event.data)payload={...payload,...event.data.json()};}catch{}
+    const windows=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+    const visible=windows.find(client=>client.visibilityState==='visible');
+    if(visible){
+      visible.postMessage({type:'homechat:push-received',conversationId:Number(payload.conversationId)||0});
+      return;
+    }
+    await self.registration.showNotification(payload.title||'HomeChat',{
+      body:payload.body||'New message',
+      icon:'/icons/homechat-192.png',
+      badge:'/icons/homechat-192.png',
+      tag:`homechat-${Number(payload.conversationId)||0}`,
+      data:{conversationId:Number(payload.conversationId)||0,url:`/?conversation=${Number(payload.conversationId)||0}`}
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil((async()=>{
+    const conversationId=Number(event.notification.data?.conversationId)||0;
+    const windows=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+    if(windows.length){
+      const client=windows[0];
+      client.postMessage({type:'homechat:open-conversation',conversationId,background:false});
+      if('focus' in client)await client.focus();
+      return;
+    }
+    if(self.clients.openWindow)await self.clients.openWindow(`/?conversation=${conversationId}`);
+  })());
+});

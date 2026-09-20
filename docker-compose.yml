@@ -17,6 +17,7 @@ services:
       HOMECHAT_ADMIN_NAME: ${HOMECHAT_ADMIN_NAME:-}
       HOMECHAT_ADMIN_PASSWORD: ${HOMECHAT_ADMIN_PASSWORD:-}
       HOMECHAT_ADMIN_PASSWORD_FILE: ${HOMECHAT_ADMIN_PASSWORD_FILE:-}
+      HOMECHAT_VAPID_SUBJECT: ${HOMECHAT_VAPID_SUBJECT:-mailto:homechat@example.invalid}
     volumes:
       - ${HOMECHAT_DATA_PATH:-homechat-data}:/app/data
     ports:

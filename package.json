@@ -1,6 +1,6 @@
 {
   "name": "homechat",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,8 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "multer": "^2.0.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -22,6 +23,7 @@
     "@types/multer": "^2.0.0",
     "@types/node": "^22.15.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "@types/web-push": "^3.6.4"
   }
 }

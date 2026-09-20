@@ -19,6 +19,8 @@ export type PrivacySettings = { dmPolicy:'everyone'|'contacts'|'nobody'; contact
 export type PublicServiceConfig = { registrationEnabled:boolean; inviteRequired:boolean; maxUploadBytes:number };
 export type AdminUser = User & { disabled:boolean; createdAt:string };
 export type AdminOverview = { settings:PublicServiceConfig; storage:{fileCount:number;bytes:number;messageCount:number;userCount:number} };
+export type PushConfig = { publicKey:string };
+export type PushSubscriptionJson = { endpoint:string; keys:{p256dh:string;auth:string}; deviceId:string };
 
 type LoginResponse = { token:string; user:User };
 
@@ -34,7 +36,7 @@ async function responseError(r:Response): Promise<ApiError> {
 
 export class HomeClient {
   socket?: Socket;
-  constructor(public baseUrl:string, public token:string) {}
+  constructor(public baseUrl:string, public token:string, public deviceId:string) {}
 
   static async login(baseUrl:string, displayName:string, password:string):Promise<LoginResponse> {
     const r = await fetch(`${baseUrl}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName,password}) });
@@ -54,9 +56,13 @@ export class HomeClient {
     return r.status===204 ? undefined as T : r.json();
   }
 
-  connect(){ this.socket = io(this.baseUrl,{auth:{token:this.token}}); return this.socket; }
+  connect(){ this.socket = io(this.baseUrl,{auth:{token:this.token,deviceId:this.deviceId}}); return this.socket; }
   ensureConnected(){ if(this.socket && !this.socket.connected) this.socket.connect(); }
   disconnect(){ this.socket?.disconnect(); }
+  logout(){return this.api<void>('/api/auth/logout',{method:'POST'});}
+  pushConfig(){return this.api<PushConfig>('/api/push/config');}
+  savePushSubscription(subscription:PushSubscriptionJson){return this.api<void>('/api/push/subscriptions',{method:'POST',body:JSON.stringify(subscription)});}
+  deletePushSubscription(endpoint:string){return this.api<void>('/api/push/subscriptions',{method:'DELETE',body:JSON.stringify({endpoint})});}
   me(){ return this.api<User>('/api/me'); }
   setDisplayName(displayName:string){return this.api<User>('/api/me',{method:'PATCH',body:JSON.stringify({displayName})});}
   users(){ return this.api<User[]>('/api/users'); }

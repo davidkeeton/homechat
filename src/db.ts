@@ -108,6 +108,20 @@ CREATE TABLE IF NOT EXISTS server_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_session ON push_subscriptions(session_token_hash);
 CREATE TABLE IF NOT EXISTS user_privacy (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   dm_policy TEXT NOT NULL DEFAULT 'everyone' CHECK(dm_policy IN ('everyone','contacts','nobody')),
@@ -242,7 +256,56 @@ export function userFromToken(token: string): PublicUser | null {
 }
 
 export function revokeToken(token: string): void {
-  db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token));
+  const tokenHash=hashToken(token);
+  db.prepare('DELETE FROM push_subscriptions WHERE session_token_hash=?').run(tokenHash);
+  db.prepare('DELETE FROM sessions WHERE token_hash=?').run(tokenHash);
+}
+
+
+export type StoredPushSubscription = { endpoint:string;p256dh:string;auth:string;deviceId:string };
+
+function cleanPushField(value:unknown,max:number,name:string):string{
+  const v=String(value??'').trim();
+  if(!v || v.length>max)throw new Error(`invalid_${name}`);
+  return v;
+}
+
+export function upsertPushSubscription(userId:number,token:string,input:{endpoint:unknown;p256dh:unknown;auth:unknown;deviceId:unknown;userAgent?:unknown}):void{
+  const endpoint=cleanPushField(input.endpoint,4096,'endpoint');
+  if(!endpoint.startsWith('https://'))throw new Error('invalid_endpoint');
+  const p256dh=cleanPushField(input.p256dh,1024,'p256dh');
+  const auth=cleanPushField(input.auth,512,'auth');
+  const deviceId=cleanPushField(input.deviceId,128,'device_id');
+  const userAgent=String(input.userAgent??'').slice(0,512);
+  const sessionHash=hashToken(token);
+  const valid=db.prepare('SELECT 1 FROM sessions WHERE token_hash=? AND user_id=? AND expires_at>?').get(sessionHash,userId,new Date().toISOString());
+  if(!valid)throw new Error('invalid_session');
+  db.prepare(`INSERT INTO push_subscriptions(user_id,session_token_hash,device_id,endpoint,p256dh,auth,user_agent,updated_at)
+    VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,session_token_hash=excluded.session_token_hash,device_id=excluded.device_id,p256dh=excluded.p256dh,auth=excluded.auth,user_agent=excluded.user_agent,updated_at=CURRENT_TIMESTAMP`)
+    .run(userId,sessionHash,deviceId,endpoint,p256dh,auth,userAgent);
+}
+
+export function deletePushSubscription(userId:number,endpoint:string):void{
+  db.prepare('DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?').run(userId,String(endpoint??''));
+}
+
+export function deletePushSubscriptionByEndpoint(endpoint:string):void{
+  db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(endpoint);
+}
+
+export function pushSubscriptionsForUser(userId:number):StoredPushSubscription[]{
+  const rows=db.prepare(`SELECT p.endpoint,p.p256dh,p.auth,p.device_id
+    FROM push_subscriptions p JOIN sessions s ON s.token_hash=p.session_token_hash AND s.user_id=p.user_id
+    JOIN users u ON u.id=p.user_id
+    WHERE p.user_id=? AND s.expires_at>? AND u.disabled=0`).all(userId,new Date().toISOString()) as any[];
+  return rows.map(r=>({endpoint:String(r.endpoint),p256dh:String(r.p256dh),auth:String(r.auth),deviceId:String(r.device_id)}));
+}
+
+export function pruneStalePushSubscriptions():number{
+  return Number(db.prepare(`DELETE FROM push_subscriptions WHERE NOT EXISTS(
+    SELECT 1 FROM sessions s WHERE s.token_hash=push_subscriptions.session_token_hash AND s.user_id=push_subscriptions.user_id AND s.expires_at>?
+  )`).run(new Date().toISOString()).changes);
 }
 
 export function isMember(conversationId: number, userId: number): boolean {
@@ -756,13 +819,14 @@ export function userExists(userId:number): boolean {
 export function setUserDisabled(userId:number,disabled:boolean): void {
   const result=db.prepare('UPDATE users SET disabled=? WHERE id=?').run(disabled?1:0,userId);
   if(!result.changes) throw new Error('not_found');
-  if(disabled) db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+  if(disabled){db.prepare('DELETE FROM push_subscriptions WHERE user_id=?').run(userId);db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);}
 }
 
 export function resetUserPassword(userId:number,password:string): void {
   if(typeof password!=='string' || password.length<8 || password.length>256) throw new Error('invalid_password');
   const result=db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),userId);
   if(!result.changes) throw new Error('not_found');
+  db.prepare('DELETE FROM push_subscriptions WHERE user_id=?').run(userId);
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
 }
 

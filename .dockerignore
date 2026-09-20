@@ -4,3 +4,5 @@ data
 .env
 secrets
 .git
+
+*.tsbuildinfo

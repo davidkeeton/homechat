@@ -8,3 +8,5 @@ data/
 *.p12
 *.pfx
 secrets/
+
+*.tsbuildinfo

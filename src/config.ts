@@ -1,9 +1,11 @@
 import path from 'node:path';
 
-export const APP_VERSION = '0.12.0';
+export const APP_VERSION = '0.13.0';
 
 const dataDir = path.resolve(process.env.DATA_DIR ?? './data');
 const tlsDir = path.resolve(process.env.TLS_DIR ?? path.join(dataDir,'tls'));
+const pushDir = path.resolve(process.env.PUSH_DIR ?? path.join(dataDir,'push'));
+
 
 export const config = {
   host: process.env.HOST ?? '0.0.0.0',
@@ -21,4 +23,7 @@ export const config = {
   tlsKeyFile: path.resolve(process.env.TLS_KEY_FILE ?? path.join(tlsDir,'homechat.key')),
   caCertFile: path.resolve(process.env.CA_CERT_FILE ?? path.join(tlsDir,'homechat-root-ca.crt')),
   caKeyFile: path.resolve(process.env.CA_KEY_FILE ?? path.join(tlsDir,'homechat-root-ca.key')),
+  pushDir,
+  vapidFile: path.resolve(process.env.VAPID_FILE ?? path.join(pushDir,'vapid.json')),
+  vapidSubject: String(process.env.HOMECHAT_VAPID_SUBJECT ?? 'mailto:homechat@example.invalid').trim() || 'mailto:homechat@example.invalid',
 };
