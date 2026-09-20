@@ -179,9 +179,19 @@ export function userCount(): number {
   return Number((db.prepare('SELECT COUNT(*) AS n FROM users').get() as any).n);
 }
 
+function cleanAccountFields(username:string, displayName:string, password:string): {username:string;displayName:string;password:string} {
+  const u=String(username ?? '').trim();
+  const d=String(displayName ?? '').trim();
+  if(u.length<1 || u.length>32) throw new Error('invalid_username');
+  if(d.length<1 || d.length>64) throw new Error('invalid_display_name');
+  if(typeof password!=='string' || password.length<8 || password.length>256) throw new Error('invalid_password');
+  return {username:u,displayName:d,password};
+}
+
 export function createUser(username: string, displayName: string, password: string, isAdmin = false): PublicUser {
+  const clean=cleanAccountFields(username,displayName,password);
   const info = db.prepare(`INSERT INTO users(hid,username,display_name,password_hash,is_admin) VALUES(?,?,?,?,?)`)
-    .run(newHid(), username.trim(), displayName.trim(), hashPassword(password), isAdmin ? 1 : 0);
+    .run(newHid(), clean.username, clean.displayName, hashPassword(clean.password), isAdmin ? 1 : 0);
   const id=Number(info.lastInsertRowid);
   db.prepare('INSERT OR IGNORE INTO user_privacy(user_id) VALUES(?)').run(id);
   return getUserById(id)!;
@@ -200,7 +210,12 @@ export function listUsers(): PublicUser[] {
   return (db.prepare('SELECT * FROM users WHERE disabled=0 ORDER BY display_name COLLATE NOCASE').all() as any[]).map(publicUser);
 }
 
+export function pruneExpiredSessions(): number {
+  return Number(db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(new Date().toISOString()).changes);
+}
+
 export function createSession(userId: number): string {
+  pruneExpiredSessions();
   const { token, hash } = newSessionToken();
   const expires = new Date(Date.now() + config.sessionDays * 86400000).toISOString();
   db.prepare('INSERT INTO sessions(user_id,token_hash,expires_at) VALUES(?,?,?)').run(userId, hash, expires);
@@ -308,6 +323,8 @@ export function messageById(id: number): MessageView | null {
 }
 
 export function createMessage(conversationId: number, senderId: number, body: string | null, fileId: number | null, clientNonce: string | null = null, replyToId: number | null = null): MessageView {
+  const cleanBody=body?.trim() || null;
+  if(cleanBody && cleanBody.length>16000) throw new Error('message_too_long');
   if(clientNonce){const existing=db.prepare('SELECT id FROM messages WHERE sender_id=? AND client_nonce=?').get(senderId,clientNonce) as any;if(existing)return messageById(Number(existing.id))!;}
   const file = fileId ? (db.prepare('SELECT mime_type FROM files WHERE id=? AND owner_id=?').get(fileId, senderId) as any) : null;
   if (fileId && !file) throw new Error('invalid_file');
@@ -316,7 +333,7 @@ export function createMessage(conversationId: number, senderId: number, body: st
     if(!reply || Number(reply.conversation_id)!==conversationId) throw new Error('invalid_reply');
   }
   const type = file ? (String(file.mime_type).startsWith('image/') ? 'image' : 'file') : 'text';
-  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id,client_nonce,reply_to_id) VALUES(?,?,?,?,?,?,?)').run(conversationId,senderId,type,body?.trim() || null,fileId,clientNonce,replyToId);
+  const info = db.prepare('INSERT INTO messages(conversation_id,sender_id,type,body,file_id,client_nonce,reply_to_id) VALUES(?,?,?,?,?,?,?)').run(conversationId,senderId,type,cleanBody,fileId,clientNonce,replyToId);
   const messageId = Number(info.lastInsertRowid);
   for (const uid of conversationMemberIds(conversationId)) {
     db.prepare('INSERT OR IGNORE INTO message_receipts(message_id,user_id) VALUES(?,?)').run(messageId,uid);
@@ -329,7 +346,7 @@ export function editMessage(messageId:number,userId:number,body:string): Message
   if(!row) throw new Error('not_found');
   if(Number(row.sender_id)!==userId) throw new Error('forbidden');
   if(row.deleted_at) throw new Error('deleted');
-  const clean=body.trim(); if(!clean) throw new Error('invalid_body');
+  const clean=body.trim(); if(!clean) throw new Error('invalid_body'); if(clean.length>16000) throw new Error('message_too_long');
   db.prepare('UPDATE messages SET body=?,edited_at=? WHERE id=?').run(clean,new Date().toISOString(),messageId);
   return messageById(messageId)!;
 }
@@ -645,6 +662,7 @@ export function areContacts(a:number,b:number): boolean {
 
 export function canMessageUser(senderId:number,recipientId:number): boolean {
   if(senderId===recipientId) return true;
+  if(!getUserById(recipientId)) return false;
   if(isBlockedPair(senderId,recipientId)) return false;
   const p=getPrivacy(recipientId);
   if(p.dmPolicy==='nobody') return false;
@@ -707,15 +725,39 @@ export function adminUsers(): AdminUserView[] {
   }));
 }
 
+export function userExists(userId:number): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM users WHERE id=?').get(userId));
+}
+
 export function setUserDisabled(userId:number,disabled:boolean): void {
-  db.prepare('UPDATE users SET disabled=? WHERE id=?').run(disabled?1:0,userId);
+  const result=db.prepare('UPDATE users SET disabled=? WHERE id=?').run(disabled?1:0,userId);
+  if(!result.changes) throw new Error('not_found');
   if(disabled) db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
 }
 
 export function resetUserPassword(userId:number,password:string): void {
-  if(password.length<8) throw new Error('password_too_short');
-  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),userId);
+  if(typeof password!=='string' || password.length<8 || password.length>256) throw new Error('invalid_password');
+  const result=db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),userId);
+  if(!result.changes) throw new Error('not_found');
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+}
+
+export function pruneOrphanFiles(beforeIso:string): number {
+  const rows=db.prepare(`
+    SELECT f.id,f.stored_name FROM files f
+    WHERE datetime(f.created_at) < datetime(?)
+      AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id)
+      AND NOT EXISTS(SELECT 1 FROM users u WHERE u.avatar_url='/api/avatars/' || f.id)
+  `).all(beforeIso) as any[];
+  if(!rows.length)return 0;
+  const del=db.prepare('DELETE FROM files WHERE id=?');
+  let removed=0;
+  for(const row of rows){
+    try{fs.unlinkSync(path.join(config.uploadDir,String(row.stored_name)));}
+    catch(e:any){if(e?.code!=='ENOENT')continue;}
+    if(del.run(Number(row.id)).changes)removed++;
+  }
+  return removed;
 }
 
 export function storageStats(): {fileCount:number;bytes:number;messageCount:number;userCount:number} {

@@ -22,29 +22,40 @@ export type AdminOverview = { settings:PublicServiceConfig; storage:{fileCount:n
 
 type LoginResponse = { token:string; user:User };
 
+export class ApiError extends Error {
+  constructor(public status:number, public code:string, message?:string){super(message||code);this.name='ApiError';}
+}
+
+async function responseError(r:Response): Promise<ApiError> {
+  let code=`http_${r.status}`;
+  try{const data=await r.json();if(typeof data?.error==='string')code=data.error;}catch{}
+  return new ApiError(r.status,code,code.replaceAll('_',' '));
+}
+
 export class HomeClient {
   socket?: Socket;
   constructor(public baseUrl:string, public token:string) {}
 
   static async login(baseUrl:string, username:string, password:string):Promise<LoginResponse> {
     const r = await fetch(`${baseUrl}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password}) });
-    if (!r.ok) throw new Error('Invalid username or password');
+    if (!r.ok) throw new ApiError(r.status,'invalid_credentials','Invalid username or password');
     return r.json();
   }
 
-  static async publicConfig(baseUrl:string):Promise<PublicServiceConfig>{const r=await fetch(`${baseUrl}/api/public-config`);if(!r.ok)throw new Error('config_failed');return r.json();}
-  static async register(baseUrl:string, username:string, displayName:string, password:string, inviteCode=''):Promise<LoginResponse>{const r=await fetch(`${baseUrl}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,displayName,password,inviteCode})});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();}
+  static async publicConfig(baseUrl:string):Promise<PublicServiceConfig>{const r=await fetch(`${baseUrl}/api/public-config`);if(!r.ok)throw await responseError(r);return r.json();}
+  static async register(baseUrl:string, username:string, displayName:string, password:string, inviteCode=''):Promise<LoginResponse>{const r=await fetch(`${baseUrl}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,displayName,password,inviteCode})});if(!r.ok)throw await responseError(r);return r.json();}
 
   async api<T>(path:string, init:RequestInit={}):Promise<T> {
     const headers = new Headers(init.headers);
     if (!(init.body instanceof FormData)) headers.set('Content-Type','application/json');
     headers.set('Authorization',`Bearer ${this.token}`);
     const r = await fetch(`${this.baseUrl}${path}`, {...init, headers});
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    if (!r.ok) throw await responseError(r);
     return r.status===204 ? undefined as T : r.json();
   }
 
   connect(){ this.socket = io(this.baseUrl,{auth:{token:this.token}}); return this.socket; }
+  ensureConnected(){ if(this.socket && !this.socket.connected) this.socket.connect(); }
   disconnect(){ this.socket?.disconnect(); }
   me(){ return this.api<User>('/api/me'); }
   users(){ return this.api<User[]>('/api/users'); }
@@ -77,13 +88,14 @@ export class HomeClient {
   addGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})}); }
   removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
   createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
-  send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:send',{conversationId,body,fileId,clientNonce,replyToId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')));}); }
-  editMessage(messageId:number,body:string){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:edit',{messageId,body},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'edit_failed')));}); }
-  deleteMessage(messageId:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:delete',{messageId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'delete_failed')));}); }
-  reaction(messageId:number,emoji:string){ return new Promise<MessageReaction[]>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('reaction:toggle',{messageId,emoji},(r:any)=>r?.ok?resolve(r.reactions):reject(new Error(r?.error??'reaction_failed')));}); }
+  private emitAck<T>(event:string,payload:unknown,timeoutMs=12000):Promise<T>{return new Promise<T>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.timeout(timeoutMs).emit(event,payload,(err:Error|null,r:any)=>{if(err)return reject(new Error('timeout'));return r?.ok?resolve(r as T):reject(new Error(r?.error??`${event}_failed`));});});}
+  async send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){const r=await this.emitAck<{ok:true;message:Message}>('message:send',{conversationId,body,fileId,clientNonce,replyToId});return r.message;}
+  async editMessage(messageId:number,body:string){const r=await this.emitAck<{ok:true;message:Message}>('message:edit',{messageId,body});return r.message;}
+  async deleteMessage(messageId:number){const r=await this.emitAck<{ok:true;message:Message}>('message:delete',{messageId});return r.message;}
+  async reaction(messageId:number,emoji:string){const r=await this.emitAck<{ok:true;reactions:MessageReaction[]}>('reaction:toggle',{messageId,emoji});return r.reactions;}
   typing(conversationId:number,typing:boolean){ this.socket?.emit('typing:set',{conversationId,typing}); }
   receipt(messageId:number,kind:'delivered'|'read'){ this.socket?.emit('receipt:set',{messageId,kind}); }
   async upload(file:File){ const fd=new FormData();fd.append('file',file); return this.api<FileView>('/api/files',{method:'POST',body:fd}); }
   async uploadAvatar(file:File){ const fd=new FormData();fd.append('file',file); return this.api<User>('/api/me/avatar',{method:'POST',body:fd}); }
-  async fileBlob(fileId:number){ const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}}); if(!r.ok)throw new Error('file_failed'); return r.blob(); }
+  async fileBlob(fileId:number){ const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}}); if(!r.ok)throw await responseError(r); return r.blob(); }
 }

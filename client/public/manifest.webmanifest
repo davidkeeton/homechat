@@ -1,0 +1,19 @@
+{
+  "name": "HomeChat",
+  "short_name": "HomeChat",
+  "description": "Private messaging for your home.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#0a0c12",
+  "theme_color": "#12141d",
+  "orientation": "any",
+  "categories": ["social", "utilities"],
+  "icons": [
+    {"src":"/icons/homechat-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"/icons/homechat-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"/icons/homechat-maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
+  ]
+}

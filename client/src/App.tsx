@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   HomeClient,
+  ApiError,
   type Conversation,
   type ContactRequests,
   type ConversationInventory,
@@ -12,6 +13,7 @@ import {
   type MessageSearchResult,
   type PrivacySettings,
   type AdminOverview,
+  type PublicServiceConfig,
   type AdminUser,
   type User,
 } from './lib/homeClient';
@@ -23,8 +25,10 @@ type Session = { token:string; user:User };
 type Lightbox = { url:string; name:string } | null;
 type InventoryTab = 'media'|'files'|'links';
 type UiMessage = Message & { sendState?:'sending'|'failed'; temp?:boolean; localFileUrl?:string; retry?:{body?:string;fileId?:number;clientNonce:string;file?:File;replyToId?:number} };
+const FILE_URL_CACHE_LIMIT=256;
 const fileUrlCache=new Map<string,string>();
 const fileUrlPending=new Map<string,Promise<string>>();
+function cacheFileUrl(key:string,url:string){const old=fileUrlCache.get(key);if(old&&old!==url)URL.revokeObjectURL(old);fileUrlCache.delete(key);fileUrlCache.set(key,url);while(fileUrlCache.size>FILE_URL_CACHE_LIMIT){const first=fileUrlCache.entries().next().value as [string,string]|undefined;if(!first)break;fileUrlCache.delete(first[0]);URL.revokeObjectURL(first[1]);}}
 
 function initials(name:string){ return name.trim().split(/\s+/).slice(0,2).map(x=>x[0]?.toUpperCase()).join('') || '?'; }
 function fmtTime(ts:string){ const d=new Date(ts); return d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}); }
@@ -59,9 +63,9 @@ function Login({onLogin}:{onLogin:(s:Session)=>void}){
 }
 
 function useFileUrl(client:HomeClient,file?:FileView|null){
-  const key=file?`${client.baseUrl}:${file.id}`:'';
+  const key=file?`${client.baseUrl}:${client.token}:${file.id}`:'';
   const [url,setUrl]=useState(()=>key?fileUrlCache.get(key)||'':'');
-  useEffect(()=>{let alive=true;if(!file||file.id<=0){setUrl('');return;}const cached=fileUrlCache.get(key);if(cached){setUrl(cached);return;}let pending=fileUrlPending.get(key);if(!pending){pending=client.fileBlob(file.id).then(b=>{const object=URL.createObjectURL(b);fileUrlCache.set(key,object);fileUrlPending.delete(key);return object;}).catch(e=>{fileUrlPending.delete(key);throw e;});fileUrlPending.set(key,pending);}pending.then(x=>alive&&setUrl(x)).catch(()=>{});return()=>{alive=false};},[client,key,file?.id]);
+  useEffect(()=>{let alive=true;if(!file||file.id<=0){setUrl('');return;}const cached=fileUrlCache.get(key);if(cached){setUrl(cached);return;}let pending=fileUrlPending.get(key);if(!pending){pending=client.fileBlob(file.id).then(b=>{const object=URL.createObjectURL(b);cacheFileUrl(key,object);fileUrlPending.delete(key);return object;}).catch(e=>{fileUrlPending.delete(key);throw e;});fileUrlPending.set(key,pending);}pending.then(x=>alive&&setUrl(x)).catch(()=>{});return()=>{alive=false};},[client,key,file?.id]);
   return url;
 }
 
@@ -245,6 +249,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const [pendingFile,setPendingFile]=useState<File|null>(null);
   const [pendingUrl,setPendingUrl]=useState<string>('');
   const [notificationPermission,setNotificationPermission]=useState<NotificationPermission>(()=>typeof Notification==='undefined'?'denied':Notification.permission);
+  const [serviceConfig,setServiceConfig]=useState<PublicServiceConfig|null>(null);
   const [drawer,setDrawer]=useState<{view:'details'|'media'|'files'|'links';target:'me'|'conversation'}|null>(null);
   const [recording,setRecording]=useState(false);
   const [recordingSeconds,setRecordingSeconds]=useState(0);
@@ -291,8 +296,8 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   useEffect(()=>{const el=composerRef.current;if(!el)return;el.style.height='0px';el.style.height=`${Math.min(el.scrollHeight,140)}px`;},[text]);
 
   async function refresh(){
-    const [freshMe,u,c]=await Promise.all([client.me(),client.users(),client.conversations()]);
-    setMe(freshMe);setUsers(u);setConversations(c);
+    const [freshMe,u,c,svc]=await Promise.all([client.me(),client.users(),client.conversations(),HomeClient.publicConfig(BASE_URL)]);
+    setMe(freshMe);setUsers(u);setConversations(c);setServiceConfig(svc);
     if(freshMe.hid!==session.user.hid||freshMe.avatarUrl!==session.user.avatarUrl||freshMe.displayName!==session.user.displayName){onSessionChange({token:session.token,user:freshMe});}
     if(!activeIdRef.current&&c.length)setActiveId(c[0].id);
   }
@@ -351,13 +356,13 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   function notifyIncoming(m:Message){const c=conversationsRef.current.find(x=>x.id===m.conversationId);const isVisible=!document.hidden&&activeIdRef.current===m.conversationId;if(isVisible)return;beep();if(typeof Notification!=='undefined'&&Notification.permission==='granted'){const title=c?conversationName(c):m.sender.displayName;const body=previewText(m);const n=new Notification(title,{body,tag:`homechat-${m.conversationId}`});n.onclick=()=>{window.focus();setActiveId(m.conversationId);n.close();};}}
 
   useEffect(()=>{
-    refresh().catch(e=>toast(errorText(e,'Could not refresh HomeChat.')));
+    refresh().catch(e=>{if(e instanceof ApiError&&e.status===401){onLogout();return;}toast(errorText(e,'Could not refresh HomeChat.'));});
     const socket=client.connect();
     const manager=socket.io;
     const connected=()=>setConnection('connected');
     const disconnected=()=>setConnection('reconnecting');
     const reconnecting=()=>setConnection('reconnecting');
-    const failed=()=>setConnection('offline');
+    const failed=(e?:Error)=>{setConnection('offline');if(e?.message==='unauthorized')onLogout();};
     socket.on('connect',connected);socket.on('disconnect',disconnected);socket.on('connect_error',failed);
     manager.on('reconnect_attempt',reconnecting);manager.on('reconnect_failed',failed);
     socket.on('presence:snapshot',(p:{userIds:number[]})=>setOnline(new Set(p.userIds)));
@@ -377,14 +382,30 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     return()=>{socket.off();manager.off('reconnect_attempt',reconnecting);manager.off('reconnect_failed',failed);client.disconnect();};
   },[client]);
   useEffect(()=>{if(activeId){void loadMessages(activeId);setPendingFile(null);}},[activeId]);
-  useEffect(()=>{function visible(){if(!document.hidden&&activeIdRef.current){const cid=activeIdRef.current;const list=messages[cid]||[];list.filter(x=>x.sender.id!==me.id).forEach(x=>client.receipt(x.id,'read'));setConversations(c=>c.map(x=>x.id===cid?{...x,unreadCount:0}:x));}}document.addEventListener('visibilitychange',visible);return()=>document.removeEventListener('visibilitychange',visible);},[client,messages,me.id]);
+  useEffect(()=>{
+    let lastResume=0;
+    function resume(){
+      if(document.hidden)return;
+      client.ensureConnected();
+      const now=Date.now();
+      if(now-lastResume>1500){lastResume=now;refresh().catch(()=>{});}
+      if(activeIdRef.current){const cid=activeIdRef.current;const list=messages[cid]||[];list.filter(x=>x.sender.id!==me.id).forEach(x=>client.receipt(x.id,'read'));setConversations(c=>c.map(x=>x.id===cid?{...x,unreadCount:0}:x));}
+    }
+    function offline(){setConnection('offline');}
+    document.addEventListener('visibilitychange',resume);
+    window.addEventListener('pageshow',resume);
+    window.addEventListener('focus',resume);
+    window.addEventListener('online',resume);
+    window.addEventListener('offline',offline);
+    return()=>{document.removeEventListener('visibilitychange',resume);window.removeEventListener('pageshow',resume);window.removeEventListener('focus',resume);window.removeEventListener('online',resume);window.removeEventListener('offline',offline);};
+  },[client,messages,me.id]);
 
   const filtered=conversations.filter(c=>conversationName(c).toLowerCase().includes(search.toLowerCase()));
   const mentionMatch=active?.type==='group'?/(?:^|\s)@([A-Za-z0-9_.-]*)$/.exec(text):null;
   const mentionSuggestions=mentionMatch?active!.members.filter(u=>u.id!==me.id&&(u.username.toLowerCase().startsWith(mentionMatch[1].toLowerCase())||u.displayName.toLowerCase().startsWith(mentionMatch[1].toLowerCase()))).slice(0,6):[];
   function insertMention(u:User){setText(t=>t.replace(/(?:^|\s)@[A-Za-z0-9_.-]*$/,m=>`${m.startsWith(' ')?' ':''}@${u.username} `));requestAnimationFrame(()=>composerRef.current?.focus());}
 
-  function queueFile(file:File){if(file.size>100*1024*1024){toast('File is larger than 100 MB.');return;}setPendingFile(file);}
+  function queueFile(file:File){const max=serviceConfig?.maxUploadBytes;if(max&&file.size>max){toast(`File exceeds the server upload limit (${fmtBytes(max)}).`);return;}setPendingFile(file);}
   async function deliverOptimistic(tempId:number,cid:number,body:string,file:File|null,clientNonce:string,fileId?:number,replyToId?:number){
     let resolvedFileId=fileId;
     try{
@@ -484,7 +505,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
           {recording&&<div className="recording-strip"><span className="record-dot"/><strong>Recording voice</strong><span>{Math.floor(recordingSeconds/60)}:{String(recordingSeconds%60).padStart(2,'0')}</span><button onClick={stopRecording}>Stop</button></div>}
           {pendingFile&&<div className="pending-file">{pendingFile.type.startsWith('image/')&&pendingUrl?<img src={pendingUrl} alt="Preview"/>:pendingFile.type.startsWith('audio/')&&pendingUrl?<audio src={pendingUrl} controls/>:<span className="file-glyph">{fileGlyph(pendingFile.name,pendingFile.type)}</span>}<div><strong>{pendingFile.type.startsWith('audio/')?'Voice message':pendingFile.name}</strong><small>{fmtBytes(pendingFile.size)} · ready to send</small></div><button title="Remove attachment" onClick={()=>setPendingFile(null)}>×</button></div>}
           {mentionSuggestions.length>0&&<div className="mention-suggest">{mentionSuggestions.map(u=><button key={u.id} onClick={()=>insertMention(u)}><Avatar name={u.displayName} avatarUrl={u.avatarUrl}/><span><strong>@{u.username}</strong><small>{u.displayName}</small></span></button>)}</div>}
-          <div className="composer"><input ref={fileRef} type="file" hidden onChange={e=>{const f=e.target.files?.[0];if(f)queueFile(f)}}/><button className="clip" onClick={()=>fileRef.current?.click()} disabled={uploading||recording||Boolean(editing)}>＋</button><textarea ref={composerRef} rows={1} value={text} onPaste={onPaste} onChange={e=>onText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={connection==='connected'?(editing?'Edit message':'Type a message or paste an image'):'Waiting for connection…'}/><button className={`mic ${recording?'recording':''}`} title={recording?'Stop recording':'Record voice message'} onClick={recording?stopRecording:()=>void startRecording()} disabled={uploading||connection!=='connected'||Boolean(editing)}>{recording?'■':'🎤'}</button><button className="send" onClick={()=>void send()} disabled={connection!=='connected'||uploading||recording||(!text.trim()&&!pendingFile)}>{uploading?'…':'➤'}</button></div>
+          <div className="composer"><input ref={fileRef} type="file" hidden onChange={e=>{const f=e.target.files?.[0];if(f)queueFile(f)}}/><button className="clip" onClick={()=>fileRef.current?.click()} disabled={uploading||recording||Boolean(editing)}>＋</button><textarea ref={composerRef} rows={1} maxLength={16000} value={text} onPaste={onPaste} onChange={e=>onText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={connection==='connected'?(editing?'Edit message':'Type a message or paste an image'):'Waiting for connection…'}/><button className={`mic ${recording?'recording':''}`} title={recording?'Stop recording':'Record voice message'} onClick={recording?stopRecording:()=>void startRecording()} disabled={uploading||connection!=='connected'||Boolean(editing)}>{recording?'■':'🎤'}</button><button className="send" onClick={()=>void send()} disabled={connection!=='connected'||uploading||recording||(!text.trim()&&!pendingFile)}>{uploading?'…':'➤'}</button></div>
         </footer>
       </>}
     </main>

@@ -1,5 +1,45 @@
 # HomeChat
 
+## v0.11 PWA / cross-platform test pass
+
+HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.
+
+- Web app manifest and install metadata
+- Home-screen/app icons for Windows, Android and iOS
+- Service worker with an offline app-shell cache (API and Socket.IO traffic are never cached)
+- Standalone display mode and mobile safe-area handling
+- `100dvh` mobile viewport handling
+- Reconnect/refresh handling after sleep, app resume, focus and network return
+- Optional built-in TLS mode for LAN PWA testing
+
+### Test server
+
+The current test host remains `192.168.98.43`. Because the web client and API are served by the same HomeChat process, there is no separate server-address setting in v0.11.
+
+Ordinary browser use continues to work at:
+
+    http://192.168.98.43:8092
+
+Full PWA behavior (service worker/installability, microphone access, etc.) requires a trusted secure origin. For LAN testing, v0.11 includes an optional local TLS mode.
+
+### LAN HTTPS for PWA testing
+
+On the Docker host:
+
+    cd ~/docker/homechat
+    ./tools/create-test-tls.sh 192.168.98.43
+
+This creates a local test CA and a server certificate under `/home/dkeeton/docker/appdata/homechat/tls`. Install `homechat-root-ca.crt` as a trusted root CA on each Windows/Android/iOS test device. Keep `homechat-root-ca.key` private on the server.
+
+Then uncomment the `TLS_CERT_FILE`, `TLS_KEY_FILE`, and `/app/tls` lines in `docker-compose.yml`, rebuild, and use:
+
+    https://192.168.98.43:8092
+
+Windows/Android can then install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
+
+
+Current version: **0.11.0** (PWA / cross-platform test pass).
+
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
 ## v0.9 social + message interaction pass
@@ -24,7 +64,7 @@ A small self-hosted household messenger with a built-in web client. HomeChat is 
 - Group details with rename, member list, add/remove member and leave-group controls
 - Flyout closes on Escape, conversation change, or when returning to the chat
 
-## v0.7 features
+## Core features
 
 - Direct messages and group chats
 - **HID**: permanent public hexadecimal identity such as `7A3F-19C2-B84D`
@@ -45,6 +85,17 @@ A small self-hosted household messenger with a built-in web client. HomeChat is 
 - Clickable hyperlinks and cached Open Graph/title link previews
 - SQLite persistence and Socket.IO realtime delivery
 - Docker deployment
+
+## v0.10.1 stabilization
+
+- Socket acknowledgement timeouts prevent messages from remaining stuck in `Sending…` forever.
+- Client upload-size validation now follows the administrator-configured server limit instead of a hard-coded 100 MB value.
+- Contact/block changes immediately refresh presence visibility for contacts-only privacy policies.
+- Expired sessions and abandoned uploads older than 24 hours are pruned automatically.
+- Account field validation is centralized and rejects whitespace-only/oversized account data.
+- Admin user mutation paths now return proper not-found errors.
+- API errors carry structured status/error codes, allowing stale sessions to return to login cleanly.
+- Basic response hardening headers are enabled and the Express signature header is disabled.
 
 ## Run with Docker
 
@@ -119,7 +170,7 @@ Back up that directory to preserve users, messages and files.
 
 HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end encryption, Internet-scale abuse controls, native mobile push notifications, or voice/video calling.
 
-## v0.7 interaction/responsiveness pass
+## Interaction/responsiveness
 
 - Optimistic local echo for outgoing messages with **Sending…**, failure state, and retry.
 - Idempotent client nonces prevent duplicate messages when a retry races a lost acknowledgement.

@@ -1,36 +1,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { lookup } from 'node:dns/promises';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import { Server as SocketServer } from 'socket.io';
-import { config } from './config.js';
+import { APP_VERSION, config } from './config.js';
 import { requireAuth } from './auth.js';
 import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
   acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
   deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
-  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting
+  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists
 } from './db.js';
 import type { LinkPreview } from './types.js';
 
 const app = express();
+app.disable('x-powered-by');
 app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'1mb'}));
+app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');next();});
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
-app.get('/health', (_req,res)=>res.json({ok:true,version:'0.10.0'}));
+app.get('/health', (_req,res)=>res.json({ok:true,version:APP_VERSION}));
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
   const {username,displayName,password} = req.body ?? {};
-  if (!username || !displayName || typeof password !== 'string' || password.length < 8) return res.status(400).json({error:'invalid_input'});
-  const user = createUser(username,displayName,password,true);
-  const token = createSession(user.id);
-  res.status(201).json({token,user});
+  try{
+    const user = createUser(String(username??''),String(displayName??''),password,true);
+    const token = createSession(user.id);
+    res.status(201).json({token,user});
+  }catch(e:any){res.status(400).json({error:e?.message||'invalid_input'});}
 });
 
 app.get('/api/public-config',(_req,res)=>res.json(getServiceSettings()));
@@ -38,11 +42,10 @@ app.post('/api/auth/register',(req,res)=>{
   const settings=getServiceSettings();
   if(!settings.registrationEnabled) return res.status(403).json({error:'registration_disabled'});
   const {username,displayName,password,inviteCode}=req.body??{};
-  if(!username||!displayName||typeof password!=='string'||password.length<8) return res.status(400).json({error:'invalid_input'});
   const inviteHash=setting('registration_invite_hash','');
   if(inviteHash&&hashToken(String(inviteCode??''))!==inviteHash) return res.status(403).json({error:'invalid_invite'});
-  try{const user=createUser(String(username),String(displayName),password,false);res.status(201).json({token:createSession(user.id),user});}
-  catch{res.status(409).json({error:'username_exists'});}
+  try{const user=createUser(String(username??''),String(displayName??''),password,false);res.status(201).json({token:createSession(user.id),user});}
+  catch(e:any){const code=e?.message==='invalid_username'||e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409;res.status(code).json({error:code===409?'username_exists':e?.message||'invalid_input'});}
 });
 
 app.post('/api/auth/login',(req,res)=>{
@@ -58,9 +61,8 @@ app.get('/api/users',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.i
 app.post('/api/users',requireAuth,(req,res)=>{
   if (!req.user!.isAdmin) return res.status(403).json({error:'admin_required'});
   const {username,displayName,password,isAdmin=false}=req.body ?? {};
-  if (!username || !displayName || typeof password!=='string' || password.length<8) return res.status(400).json({error:'invalid_input'});
-  try { res.status(201).json(createUser(username,displayName,password,Boolean(isAdmin))); }
-  catch { res.status(409).json({error:'username_exists'}); }
+  try { res.status(201).json(createUser(String(username??''),String(displayName??''),password,Boolean(isAdmin))); }
+  catch(e:any) { const code=e?.message==='invalid_username'||e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409; res.status(code).json({error:code===409?'username_exists':e?.message||'invalid_input'}); }
 });
 
 app.get('/api/me/privacy',requireAuth,(req,res)=>res.json(getPrivacy(req.user!.id)));
@@ -78,11 +80,12 @@ app.put('/api/admin/settings',requireAuth,(req,res)=>{
 });
 app.patch('/api/admin/users/:id',requireAuth,(req,res)=>{
   if(!requireAdmin(req,res))return;const id=Number(req.params.id);if(id===req.user!.id&&req.body?.disabled===true)return res.status(400).json({error:'cannot_disable_self'});
-  if(!getUserForLogin(String((adminUsers().find(u=>u.id===id)?.username)||'')))return res.status(404).json({error:'not_found'});
-  if(typeof req.body?.disabled==='boolean'){setUserDisabled(id,req.body.disabled);if(req.body.disabled)io.to(roomForUser(id)).disconnectSockets(true);}res.status(204).end();
+  if(!userExists(id))return res.status(404).json({error:'not_found'});
+  try{if(typeof req.body?.disabled==='boolean'){setUserDisabled(id,req.body.disabled);if(req.body.disabled)io.to(roomForUser(id)).disconnectSockets(true);}res.status(204).end();}
+  catch(e:any){res.status(e?.message==='not_found'?404:400).json({error:e?.message||'update_failed'});}
 });
 app.post('/api/admin/users/:id/reset-password',requireAuth,(req,res)=>{
-  if(!requireAdmin(req,res))return;const password=String(req.body?.password??'');try{resetUserPassword(Number(req.params.id),password);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'reset_failed'});}
+  if(!requireAdmin(req,res))return;const id=Number(req.params.id);const password=String(req.body?.password??'');try{resetUserPassword(id,password);io.to(roomForUser(id)).disconnectSockets(true);res.status(204).end();}catch(e:any){res.status(e?.message==='not_found'?404:400).json({error:e?.message||'reset_failed'});}
 });
 
 
@@ -95,13 +98,13 @@ app.post('/api/contact-requests',requireAuth,(req,res)=>{
   try{sendContactRequest(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
 });
 app.post('/api/contact-requests/:id/accept',requireAuth,(req,res)=>{
-  try{acceptContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();}catch{res.status(404).json({error:'request_not_found'});}
+  try{const before=contactRequests(req.user!.id).incoming.find(x=>x.id===Number(req.params.id));acceptContactRequest(Number(req.params.id),req.user!.id);if(before){syncPresenceVisibility(before.sender.id);syncPresenceVisibility(req.user!.id);}res.status(204).end();}catch{res.status(404).json({error:'request_not_found'});}
 });
 app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{declineContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();});
-app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{removeContact(req.user!.id,Number(req.params.userId));res.status(204).end();});
+app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{const other=Number(req.params.userId);removeContact(req.user!.id,other);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(other);res.status(204).end();});
 app.get('/api/blocks',requireAuth,(req,res)=>res.json(listBlocked(req.user!.id)));
-app.post('/api/blocks',requireAuth,(req,res)=>{const uid=Number(req.body?.userId);try{blockUser(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'block_failed'});}});
-app.delete('/api/blocks/:userId',requireAuth,(req,res)=>{unblockUser(req.user!.id,Number(req.params.userId));res.status(204).end();});
+app.post('/api/blocks',requireAuth,(req,res)=>{const uid=Number(req.body?.userId);try{blockUser(req.user!.id,uid);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'block_failed'});}});
+app.delete('/api/blocks/:userId',requireAuth,(req,res)=>{const other=Number(req.params.userId);unblockUser(req.user!.id,other);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(other);res.status(204).end();});
 
 app.get('/api/conversations',requireAuth,(req,res)=>{
   findOrCreateSelf(req.user!.id);
@@ -116,13 +119,13 @@ app.post('/api/conversations/direct',requireAuth,(req,res)=>{
 });
 app.post('/api/conversations/group',requireAuth,(req,res)=>{
   const name=String(req.body?.name??'').trim(); const members=Array.isArray(req.body?.memberIds)?req.body.memberIds.map(Number):[];
-  if (!name || members.length<1) return res.status(400).json({error:'invalid_group'});
+  if (!name || name.length>100 || members.length<1) return res.status(400).json({error:'invalid_group'});
   if (members.some((id:number)=>!getUserById(id))) return res.status(400).json({error:'invalid_member'});
   res.status(201).json({id:createGroup(req.user!.id,name,members)});
 });
 app.patch('/api/conversations/:id/group',requireAuth,(req,res)=>{
   const cid=Number(req.params.id); if(!isMember(cid,req.user!.id)) return res.status(403).json({error:'not_a_member'});
-  const name=String(req.body?.name??'').trim(); if(!name) return res.status(400).json({error:'invalid_name'});
+  const name=String(req.body?.name??'').trim(); if(!name || name.length>100) return res.status(400).json({error:'invalid_name'});
   try { renameGroup(cid,name); res.status(204).end(); } catch { res.status(400).json({error:'not_group'}); }
 });
 app.post('/api/conversations/:id/members',requireAuth,(req,res)=>{
@@ -157,9 +160,10 @@ app.post('/api/files',requireAuth,uploadSingle,(req,res)=>{
 });
 app.post('/api/me/avatar',requireAuth,uploadSingle,(req,res)=>{
   if (!req.file) return res.status(400).json({error:'missing_file'});
-  if (!String(req.file.mimetype).startsWith('image/')) {
+  const avatarTypes=new Set(['image/jpeg','image/png','image/webp','image/gif']);
+  if (!avatarTypes.has(String(req.file.mimetype)) || req.file.size>10*1024*1024) {
     try { fs.unlinkSync(req.file.path); } catch {}
-    return res.status(400).json({error:'avatar_must_be_image'});
+    return res.status(400).json({error:req.file.size>10*1024*1024?'avatar_too_large':'avatar_must_be_raster_image'});
   }
   const id=insertFile(req.user!.id,req.file.originalname,req.file.filename,req.file.mimetype || 'application/octet-stream',req.file.size);
   try { res.json(setUserAvatar(req.user!.id,id)); }
@@ -227,7 +231,7 @@ async function fetchLinkPreview(raw:string): Promise<LinkPreview> {
   const url=await safePreviewUrl(raw);
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),4500);
   try {
-    const r=await fetch(url,{signal:controller.signal,redirect:'error',headers:{'User-Agent':'HomeChat/0.6 link-preview','Accept':'text/html,application/xhtml+xml'}});
+    const r=await fetch(url,{signal:controller.signal,redirect:'error',headers:{'User-Agent':`HomeChat/${APP_VERSION} link-preview`,'Accept':'text/html,application/xhtml+xml'}});
     if(!r.ok) throw new Error('fetch_failed');
     const type=r.headers.get('content-type')||''; if(!/text\/html|application\/xhtml\+xml/i.test(type)) throw new Error('not_html');
     const html=await readLimitedHtml(r);
@@ -249,7 +253,11 @@ if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
   app.get('/', (_req,res)=>res.sendFile(path.join(publicDir,'index.html')));
 }
-const server=http.createServer(app);
+const tlsEnabled=Boolean(config.tlsCertFile&&config.tlsKeyFile);
+if(Boolean(config.tlsCertFile)!==Boolean(config.tlsKeyFile)) throw new Error('TLS_CERT_FILE and TLS_KEY_FILE must be configured together');
+const server=tlsEnabled
+  ? https.createServer({cert:fs.readFileSync(config.tlsCertFile!),key:fs.readFileSync(config.tlsKeyFile!)},app)
+  : http.createServer(app);
 const io=new SocketServer(server,{cors:{origin:true,credentials:true}});
 const online=new Map<number,number>();
 function roomForUser(id:number){return `user:${id}`;}
@@ -316,4 +324,12 @@ io.on('connection',(socket)=>{
   });
 });
 
-server.listen(config.port,config.host,()=>console.log(`HomeChat listening on http://${config.host}:${config.port}`));
+function cleanupStorage(): void {
+  pruneExpiredSessions();
+  const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
+  pruneOrphanFiles(cutoff);
+}
+cleanupStorage();
+const cleanupTimer=setInterval(cleanupStorage,6*60*60*1000);(cleanupTimer as any).unref?.();
+
+server.listen(config.port,config.host,()=>console.log(`HomeChat ${APP_VERSION} listening on ${tlsEnabled?'https':'http'}://${config.host}:${config.port}`));
