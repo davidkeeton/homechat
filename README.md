@@ -1,6 +1,6 @@
 # HomeChat
 
-## v0.11 PWA / cross-platform test pass
+## v0.11.1 PWA / cross-platform test pass
 
 HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.
 
@@ -225,3 +225,10 @@ Disabled accounts have their sessions revoked and connected sockets are disconne
 ### Upload limit
 
 `MAX_UPLOAD_BYTES` remains the initial default for a fresh database. Once changed from Administration, the database-backed value is used immediately for new uploads.
+
+## v0.11.1 mobile navigation fix
+
+- Adds persistent mobile bottom navigation for Chats, People, New, and Me.
+- Adds a back button to active conversations on mobile.
+- Contacts/directory and new-chat dialogs become full-screen mobile sheets.
+- Adds a coarse-pointer/phone-screen fallback so Android phones still use the mobile shell if Chrome reports a desktop-sized layout viewport.

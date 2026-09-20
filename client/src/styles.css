@@ -382,3 +382,43 @@ body{overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
   input,textarea,.body,.message-link,.detail-line strong,.inventory-body{user-select:text;-webkit-user-select:text}
   .app-shell{margin:0;max-width:none;height:100vh;height:100dvh;border-radius:0;border:0;box-shadow:none}
 }
+
+/* ===== v0.11.1 mobile navigation / Android viewport fallback ===== */
+.mobile-nav,.mobile-back{display:none}
+
+@media(max-width:760px){
+  .mobile-nav{display:grid}
+  .mobile-back{display:grid}
+  .sidebar,.chat-panel{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+  .conversation-list{padding-bottom:18px}
+  .contacts-modal,.modal{width:100vw;max-width:none;max-height:none;height:100dvh;border-radius:0;padding-top:max(18px,env(safe-area-inset-top));padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+}
+
+/* Chrome's "desktop site" mode can report a wide layout viewport on a phone.
+   App.tsx adds .mobile-runtime for coarse-pointer phone-sized devices so the
+   application still uses its mobile navigation shell. */
+html.mobile-runtime .app-shell{grid-template-columns:1fr;margin:0;max-width:none;height:100dvh;border-radius:0;border:0;box-shadow:none}
+html.mobile-runtime .sidebar{display:flex;padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+html.mobile-runtime .chat-panel{display:none;padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+html.mobile-runtime .app-shell:has(.chat-panel .chat-head) .sidebar{display:none}
+html.mobile-runtime .app-shell:has(.chat-panel .chat-head) .chat-panel{display:flex}
+html.mobile-runtime .mobile-nav{display:grid}
+html.mobile-runtime .mobile-back{display:grid}
+html.mobile-runtime .messages{padding:16px 12px}
+html.mobile-runtime .bubble{max-width:88%}
+html.mobile-runtime .attachment.image img{max-width:min(72vw,340px)}
+html.mobile-runtime .attachment.file{min-width:0}
+html.mobile-runtime .attachment.audio{min-width:min(76vw,340px)}
+html.mobile-runtime .attachment.video video{max-width:76vw}
+html.mobile-runtime .link-preview{max-width:76vw}
+html.mobile-runtime .inventory-drawer{width:100vw}
+html.mobile-runtime .contacts-modal,
+html.mobile-runtime .modal{width:100vw;max-width:none;max-height:none;height:100dvh;border-radius:0;padding-top:max(18px,env(safe-area-inset-top));padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+
+.mobile-back{width:36px;height:36px;place-items:center;flex:none;border:0;background:transparent;color:var(--text);font-size:34px;line-height:1;border-radius:10px;margin-left:-7px;margin-right:3px}
+.mobile-back:hover{background:var(--panel-3)}
+.mobile-nav{position:fixed;z-index:140;left:0;right:0;bottom:0;grid-template-columns:repeat(4,1fr);height:calc(60px + env(safe-area-inset-bottom));padding:4px 8px env(safe-area-inset-bottom);background:rgba(18,20,29,.97);border-top:1px solid var(--border);backdrop-filter:blur(16px);box-shadow:0 -8px 30px rgba(0,0,0,.24)}
+.mobile-nav button{border:0;background:transparent;color:var(--text-dim);border-radius:11px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-width:0}
+.mobile-nav button span{font-size:21px;line-height:22px}
+.mobile-nav button small{font-size:10px;font-weight:700}
+.mobile-nav button.active{color:var(--accent-line);background:var(--accent-soft)}

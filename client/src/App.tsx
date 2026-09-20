@@ -287,6 +287,18 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
 
   const previousActiveRef=useRef<number|null>(null);
   useEffect(()=>{const prev=previousActiveRef.current;if(prev!==null&&!editing)setDrafts(d=>({...d,[prev]:text}));previousActiveRef.current=activeId;activeIdRef.current=activeId;setDrawer(null);setReplyingTo(null);setEditing(null);setText(activeId?drafts[activeId]||'':'');},[activeId]);
+  useEffect(()=>{
+    const applyMobileRuntime=()=>{
+      const coarse=window.matchMedia('(pointer: coarse)').matches||navigator.maxTouchPoints>0;
+      const phoneScreen=Math.min(window.screen.width,window.screen.height)<=900;
+      const narrow=window.matchMedia('(max-width: 760px)').matches;
+      document.documentElement.classList.toggle('mobile-runtime',narrow||(coarse&&phoneScreen));
+    };
+    applyMobileRuntime();
+    window.addEventListener('resize',applyMobileRuntime);
+    window.addEventListener('orientationchange',applyMobileRuntime);
+    return()=>{window.removeEventListener('resize',applyMobileRuntime);window.removeEventListener('orientationchange',applyMobileRuntime);document.documentElement.classList.remove('mobile-runtime');};
+  },[]);
   useEffect(()=>{localStorage.setItem(`homechat.drafts.${me.id}`,JSON.stringify(drafts));},[drafts,me.id]);
   useEffect(()=>{function key(e:KeyboardEvent){if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setCommandOpen(true);return;}if(e.key==='Escape'){setDrawer(null);setCommandOpen(false);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
   useEffect(()=>{conversationsRef.current=conversations;const unread=conversations.reduce((n,c)=>n+c.unreadCount,0);document.title=unread?`(${unread}) HomeChat`:'HomeChat';},[conversations]);
@@ -492,7 +504,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
 
     <main className="chat-panel" onDragOver={e=>{if(active)e.preventDefault()}} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f&&active)queueFile(f)}}>
       {!active?<div className="welcome"><div className="brand-mark big">H</div><h2>HomeChat</h2><p>Pick a conversation or start a new one.</p></div>:<>
-        <header className="chat-head"><button className="head-profile" onClick={()=>setDrawer({view:'details',target:'conversation'})}><Avatar name={conversationName(active)} avatarUrl={conversationAvatar(active)} online={conversationOnline(active)}/><div className="chat-head-copy"><strong>{conversationName(active)}</strong><small>{typingNames(active)?`${typingNames(active)} typing…`:conversationSubline(active)}</small></div></button><button className="info-button" title="Conversation details" onClick={()=>setDrawer({view:'details',target:'conversation'})}>ⓘ</button></header>
+        <header className="chat-head"><button className="mobile-back" title="Back to chats" aria-label="Back to chats" onClick={()=>setActiveId(null)}>‹</button><button className="head-profile" onClick={()=>setDrawer({view:'details',target:'conversation'})}><Avatar name={conversationName(active)} avatarUrl={conversationAvatar(active)} online={conversationOnline(active)}/><div className="chat-head-copy"><strong>{conversationName(active)}</strong><small>{typingNames(active)?`${typingNames(active)} typing…`:conversationSubline(active)}</small></div></button><button className="info-button" title="Conversation details" onClick={()=>setDrawer({view:'details',target:'conversation'})}>ⓘ</button></header>
         <section ref={messagesRef} className="messages" onMouseDown={()=>setDrawer(null)} onScroll={e=>{if(e.currentTarget.scrollTop<80)void loadOlder(active.id)}}>
           {loadingOlder[active.id]&&<div className="history-status">Loading older messages…</div>}
           {!loadingOlder[active.id]&&hasMore[active.id]===false&&(messages[active.id]?.length??0)>0&&<div className="history-status subtle">Start of conversation</div>}
@@ -509,6 +521,12 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
         </footer>
       </>}
     </main>
+    <nav className="mobile-nav" aria-label="HomeChat navigation">
+      <button className={!active?'active':''} onClick={()=>{setActiveId(null);setContactsOpen(false);setNewChat(false);setDrawer(null)}}><span>☰</span><small>Chats</small></button>
+      <button className={contactsOpen?'active':''} onClick={()=>{setContactsOpen(true);setNewChat(false);setDrawer(null)}}><span>⌕</span><small>People</small></button>
+      <button className={newChat?'active':''} onClick={()=>{setNewChat(true);setContactsOpen(false);setDrawer(null)}}><span>＋</span><small>New</small></button>
+      <button className={drawer?.target==='me'?'active':''} onClick={()=>{setDrawer({view:'details',target:'me'});setContactsOpen(false);setNewChat(false)}}><span>●</span><small>Me</small></button>
+    </nav>
     {drawer&&<ContextDrawer client={client} conversation={drawer.target==='conversation'?active:null} me={me} users={users} online={online} view={drawer.view} target={drawer.target} onView={view=>setDrawer(d=>d?{...d,view}:d)} onClose={()=>setDrawer(null)} onCopy={(text,label)=>void copyText(text,label)} onChangeAvatar={()=>avatarRef.current?.click()} onRenameGroup={renameActiveGroup} onAddMember={addActiveGroupMember} onRemoveMember={removeActiveGroupMember} onLeaveGroup={leaveActiveGroup}/>} 
     {contactsOpen&&<ContactsModal client={client} me={me} online={online} onClose={()=>setContactsOpen(false)} onDirect={u=>{setContactsOpen(false);void direct(u)}} onChanged={()=>void refresh()}/>}
     {newChat&&<NewChatModal users={users} current={me} onClose={()=>setNewChat(false)} onDirect={direct} onGroup={group} onSaved={saved}/>} 
