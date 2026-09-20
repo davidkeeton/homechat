@@ -52,6 +52,7 @@ function Login({onLogin}:{onLogin:(s:Session)=>void}){
   async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const next=registering?await HomeClient.register(BASE_URL,username,displayName,password,inviteCode):await HomeClient.login(BASE_URL,username,password);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){setError(e.message||'Sign in failed');}finally{setBusy(false);}}
   return <div className="login-shell"><form className="login-card" onSubmit={submit}>
     <div className="brand-mark">H</div><h1>HomeChat</h1><p>{registering?'Create your HomeChat account.':'Private chat for your home.'}</p>
+    {window.location.protocol==='http:'&&<div className="cert-banner"><div><strong>Secure HomeChat setup</strong><span>Install the HomeChat certificate before connecting over HTTPS.</span></div><a href="/homechat-root-ca.crt">Install certificate</a></div>}
     {registering&&<label>Display name<input autoFocus value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete="name" /></label>}
     <label>Username<input autoFocus={!registering} value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" /></label>
     <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={registering?'new-password':'current-password'} /></label>

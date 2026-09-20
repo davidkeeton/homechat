@@ -27,6 +27,14 @@ app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
 app.get('/health', (_req,res)=>res.json({ok:true,version:APP_VERSION}));
 
+app.get('/homechat-root-ca.crt', (_req,res)=>{
+  if(!fs.existsSync(config.caCertFile)) return res.status(404).type('text/plain').send('HomeChat CA certificate has not been generated yet.');
+  res.type('application/x-x509-ca-cert');
+  res.setHeader('Content-Disposition','attachment; filename=\"homechat-root-ca.crt\"');
+  res.setHeader('Cache-Control','no-store');
+  res.sendFile(config.caCertFile);
+});
+
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
   const {username,displayName,password} = req.body ?? {};

@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const APP_VERSION = '0.11.3';
+export const APP_VERSION = '0.11.4';
 
 export const config = {
   port: Number(process.env.PORT ?? 3000),
@@ -11,4 +11,5 @@ export const config = {
   sessionDays: Number(process.env.SESSION_DAYS ?? 30),
   tlsCertFile: process.env.TLS_CERT_FILE ? path.resolve(process.env.TLS_CERT_FILE) : null,
   tlsKeyFile: process.env.TLS_KEY_FILE ? path.resolve(process.env.TLS_KEY_FILE) : null,
+  caCertFile: path.resolve(process.env.CA_CERT_FILE ?? path.join(process.env.DATA_DIR ?? './data','tls','homechat-root-ca.crt')),
 };

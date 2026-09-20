@@ -198,6 +198,12 @@ button{cursor:pointer}
 .login-card p{text-align:center;color:var(--text-dim);margin:0 0 24px}
 .login-card label,.field{display:block;color:var(--text-dim);font-size:13px;margin:14px 0 6px}
 .login-card input,.field input{margin-top:6px}
+.cert-banner{margin:0 0 18px;padding:12px 13px;display:flex;align-items:center;gap:12px;background:rgba(88,119,255,.10);border:1px solid rgba(122,145,255,.32);border-radius:12px}
+.cert-banner>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px}
+.cert-banner strong{font-size:13px;color:var(--text)}
+.cert-banner span{font-size:12px;line-height:1.35;color:var(--text-dim)}
+.cert-banner a{flex:none;border-radius:9px;padding:8px 10px;background:var(--accent);color:#fff;text-decoration:none;font-size:12px;font-weight:700;white-space:nowrap}
+.cert-banner a:hover{filter:brightness(1.08)}
 .primary,.secondary{border:0;border-radius:12px;padding:11px 15px;font-weight:700}
 .primary{background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff}
 .primary:hover{filter:brightness(1.08)}

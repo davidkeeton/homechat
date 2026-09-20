@@ -1,6 +1,6 @@
 # HomeChat
 
-## v0.11.3 PWA / cross-platform test pass
+## v0.11.4 PWA / cross-platform test pass
 
 HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.
 
@@ -31,14 +31,22 @@ On the Docker host:
 
 This creates a local test CA and a server certificate under `/home/dkeeton/docker/appdata/homechat/tls`. Install `homechat-root-ca.crt` as a trusted root CA on each Windows/Android/iOS test device. Keep `homechat-root-ca.key` private on the server.
 
-Then uncomment the `TLS_CERT_FILE`, `TLS_KEY_FILE`, and `/app/tls` lines in `docker-compose.yml`, rebuild, and use:
+The existing appdata mount already exposes this folder inside the container as `/app/data/tls`, so no second volume mount is required. On the plain-HTTP login page HomeChat now shows an **Install certificate** banner. That link serves only:
+
+    /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt
+
+through the relative URL:
+
+    /homechat-root-ca.crt
+
+The private keys are never exposed by that route. After installing/trusting the CA on the device, uncomment `TLS_CERT_FILE` and `TLS_KEY_FILE` in `docker-compose.yml`, rebuild, and use:
 
     https://192.168.98.43:8092
 
 Windows/Android can then install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.3** (mobile/offline message-send reliability fix).
+Current version: **0.11.4** (HTTP login certificate-install banner for LAN HTTPS setup).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
@@ -52,7 +60,7 @@ Recommended workflow:
 # Development machine / repository clone
 git status
 git add .
-git commit -m "HomeChat v0.11.3 chat request fixes"
+git commit -m "HomeChat v0.11.4 certificate install banner"
 git push origin main
 ```
 
@@ -82,8 +90,8 @@ Keep the application version synchronized in the server health response, package
 After a version has been built and smoke-tested:
 
 ```bash
-git tag -a v0.11.3 -m "HomeChat v0.11.3"
-git push origin v0.11.3
+git tag -a v0.11.4 -m "HomeChat v0.11.4"
+git push origin v0.11.4
 ```
 
 Tags are useful checkpoints even while development continues directly on `main`.
@@ -347,3 +355,12 @@ Disabled accounts have their sessions revoked and connected sockets are disconne
 - Recipients do not need to be online for a message to be accepted and stored by the server.
 - Accepted contacts are recognized in either direction to tolerate legacy/asymmetric contact rows from earlier builds.
 - The existing Socket.IO `message:send` handler remains available for backward compatibility with older clients.
+
+
+## v0.11.4 certificate onboarding
+
+- Plain-HTTP login page shows a **Secure HomeChat setup** banner.
+- **Install certificate** downloads the public HomeChat root CA from `/homechat-root-ca.crt`.
+- The route reads the certificate from `tls/homechat-root-ca.crt` under the existing appdata directory (`/app/data/tls/homechat-root-ca.crt` in the container).
+- The route exposes only the public `.crt`; private `.key` files are not web-accessible.
+- TLS server certificate/key paths in the sample Compose file now use the existing appdata mount (`/app/data/tls/...`) rather than requiring a second volume mount.
