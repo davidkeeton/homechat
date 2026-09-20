@@ -2,9 +2,23 @@
 
 HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, and an installable PWA for desktop and mobile.
 
-**Current version:** `0.13.1`
+**Current version:** `0.14.0`
 
 HomeChat is intended for LAN/VPN use. It is not currently designed to be exposed directly to the public Internet.
+
+## What v0.14.0 changes
+
+v0.14.0 is a UI/product-polish release focused on consistency, readability, and installability.
+
+- Replaces placeholder Unicode action glyphs with Lucide React SVG icons for consistent rendering across Windows, Android, iOS, and browsers.
+- Adds distinct unread-mention badges in the conversation list.
+- Adds subtle message/reaction/button motion with `prefers-reduced-motion` support.
+- Renders fenced code blocks and likely log/config pastes in a dedicated monospace block.
+- Adds automatic light mode through `prefers-color-scheme`.
+- Adds conversation-list skeleton loading and a blurred image placeholder transition.
+- Adds an in-app install card using `beforeinstallprompt` where supported, with iOS-specific Add to Home Screen guidance.
+
+No database reset is required. The conversation summary response now includes an unread `mentionCount`; existing databases and message data are unchanged.
 
 ## What v0.13.0 changes
 
@@ -32,7 +46,7 @@ Existing messages, users, uploads, TLS certificates, and normal Socket.IO delive
 - Contacts and contact requests
 - Searchable user directory by display name or HID
 - Presence and typing indicators
-- Delivered/read receipts and unread counts
+- Delivered/read receipts, unread counts, and distinct mention badges
 - Message history pagination
 - Reactions, replies, edit, and soft-delete
 - Image paste and drag/drop uploads
@@ -40,6 +54,9 @@ Existing messages, users, uploads, TLS certificates, and normal Socket.IO delive
 - Browser-recorded voice snippets
 - Per-conversation Media / Files / Links views
 - Link previews
+- Styled fenced code/log blocks
+- Dark and light color-scheme support
+- Branded PWA install prompt
 - User avatars
 - Privacy controls and block list
 - Administration screen
@@ -303,10 +320,10 @@ Open the HTTPS site in Edge/Chrome and use the browser's **Install app** action.
 
 The client build generates `public/sw.js` from `sw.template.js` using the version in `client/package.json`.
 
-For v0.13.0 the cache name is generated as:
+For v0.14.0 the cache name is generated as:
 
 ```text
-homechat-v0.13.0
+homechat-v0.14.0
 ```
 
 When a new service worker activates, older `homechat-*` caches are removed automatically.
@@ -315,11 +332,13 @@ Do not manually maintain the cache version string.
 
 ## Notifications
 
-Current notifications use the browser Notification API when a realtime message reaches the active HomeChat client.
+HomeChat supports both realtime in-app notifications and standards-based Web Push.
 
-That means notifications work while the PWA/browser is alive, but a fully suspended or closed PWA cannot currently be awakened for a new message.
-
-Background Web Push (VAPID + push subscriptions + service-worker push handling) is planned separately. It is intentionally not part of the v0.13.0 portability release.
+- Socket.IO handles realtime delivery while a client is connected.
+- Web Push uses persisted VAPID keys and per-device subscriptions so an installed PWA can receive notifications while backgrounded or closed.
+- Active devices are excluded from redundant server push while other subscribed devices can still be notified.
+- Expired push subscriptions are cleaned up automatically.
+- On iPhone/iPad, HomeChat must be installed to the Home Screen before background Web Push can be enabled.
 
 ## Offline behavior
 
@@ -388,15 +407,15 @@ Typical release workflow:
 ```bash
 git status
 git add .
-git commit -m "HomeChat v0.13.0 portable deployment"
+git commit -m "HomeChat v0.14.0 UI polish"
 git push origin main
 ```
 
 After testing:
 
 ```bash
-git tag -a v0.13.0 -m "HomeChat v0.13.0"
-git push origin v0.13.0
+git tag -a v0.14.0 -m "HomeChat v0.14.0"
+git push origin v0.14.0
 ```
 
 ## Files that must not be committed

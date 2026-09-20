@@ -21,6 +21,7 @@ export interface ConversationSummary {
   avatarUrl: string | null;
   members: PublicUser[];
   unreadCount: number;
+  mentionCount: number;
   lastMessage: MessageView | null;
 }
 

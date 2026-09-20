@@ -503,6 +503,13 @@ export function getAvatarFile(fileId:number): any | null {
   `).get(url,url,fileId) as any) ?? null;
 }
 
+function messageMentionsDisplayName(body:string|null|undefined,displayName:string): boolean {
+  if(!body||!displayName)return false;
+  const escaped=displayName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const pattern=/\s/.test(displayName)?new RegExp(`(?:^|\\s)@\"${escaped}\"(?=$|\\s|[.,!?;:])`,'i'):new RegExp(`(?:^|\\s)@${escaped}(?=$|\\s|[.,!?;:])`,'i');
+  return pattern.test(body);
+}
+
 export function conversationSummaries(userId:number): ConversationSummary[] {
   const rows = db.prepare(`
     SELECT c.*,
@@ -512,12 +519,14 @@ export function conversationSummaries(userId:number): ConversationSummary[] {
     WHERE cm.user_id=?
     ORDER BY last_message_id DESC, c.id DESC
   `).all(userId) as any[];
+  const meRow=db.prepare('SELECT display_name FROM users WHERE id=?').get(userId) as any;
   return rows.map(c => {
     const members = (db.prepare(`SELECT u.* FROM users u JOIN conversation_members cm ON cm.user_id=u.id WHERE cm.conversation_id=? ORDER BY u.display_name`).all(c.id) as any[]).map(publicUser);
     const lm = Number(c.last_message_id) ? {id:Number(c.last_message_id)} : null;
-    const unread = db.prepare(`SELECT COUNT(*) AS n FROM message_receipts mr JOIN messages m ON m.id=mr.message_id WHERE mr.user_id=? AND m.conversation_id=? AND mr.read_at IS NULL AND m.sender_id<>?`).get(userId,c.id,userId) as any;
+    const unreadRows = db.prepare(`SELECT m.body FROM message_receipts mr JOIN messages m ON m.id=mr.message_id WHERE mr.user_id=? AND m.conversation_id=? AND mr.read_at IS NULL AND m.sender_id<>?`).all(userId,c.id,userId) as any[];
+    const mentionCount=unreadRows.reduce((n,r)=>n+(messageMentionsDisplayName(r.body,meRow?.display_name||'')?1:0),0);
     const isSelf = c.type === 'direct' && members.length === 1 && members[0]?.id === userId;
-    return { id:Number(c.id), type:c.type, isSelf, name:c.name ?? null, avatarUrl:c.avatar_url ?? null, members, unreadCount:Number(unread.n), lastMessage:lm ? messageById(Number(lm.id)) : null };
+    return { id:Number(c.id), type:c.type, isSelf, name:c.name ?? null, avatarUrl:c.avatar_url ?? null, members, unreadCount:unreadRows.length, mentionCount, lastMessage:lm ? messageById(Number(lm.id)) : null };
   });
 }
 
