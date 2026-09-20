@@ -15,8 +15,7 @@ db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  display_name TEXT NOT NULL,
+  display_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
   avatar_url TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,
@@ -120,6 +119,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(token_hash);
 `);
 
+// v0.11.5 deliberately starts the simplified HID + display-name identity model fresh.
+// Do not silently mutate or delete a pre-release username-based database.
+const identityColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
+if (identityColumns.some(c => String(c.name) === 'username')) {
+  throw new Error('legacy_username_database: v0.11.5 requires a fresh homechat.db; back up and remove the old pre-production database before starting');
+}
 
 // v0.7 migration: idempotent client nonces make optimistic-send retries safe.
 const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as any[];
@@ -168,7 +173,6 @@ function publicUser(row: any): PublicUser {
   return {
     id: Number(row.id),
     hid: String(row.hid),
-    username: String(row.username),
     displayName: String(row.display_name),
     avatarUrl: row.avatar_url ? String(row.avatar_url) : null,
     isAdmin: Boolean(row.is_admin),
@@ -179,19 +183,26 @@ export function userCount(): number {
   return Number((db.prepare('SELECT COUNT(*) AS n FROM users').get() as any).n);
 }
 
-function cleanAccountFields(username:string, displayName:string, password:string): {username:string;displayName:string;password:string} {
-  const u=String(username ?? '').trim();
+function cleanAccountFields(displayName:string, password:string): {displayName:string;password:string} {
   const d=String(displayName ?? '').trim();
-  if(u.length<1 || u.length>32) throw new Error('invalid_username');
   if(d.length<1 || d.length>64) throw new Error('invalid_display_name');
   if(typeof password!=='string' || password.length<8 || password.length>256) throw new Error('invalid_password');
-  return {username:u,displayName:d,password};
+  return {displayName:d,password};
 }
 
-export function createUser(username: string, displayName: string, password: string, isAdmin = false): PublicUser {
-  const clean=cleanAccountFields(username,displayName,password);
-  const info = db.prepare(`INSERT INTO users(hid,username,display_name,password_hash,is_admin) VALUES(?,?,?,?,?)`)
-    .run(newHid(), clean.username, clean.displayName, hashPassword(clean.password), isAdmin ? 1 : 0);
+function displayNameInUse(displayName:string, exceptUserId?:number): boolean {
+  const d=String(displayName ?? '').trim();
+  if(!d) return false;
+  return Boolean(exceptUserId
+    ? db.prepare('SELECT 1 FROM users WHERE display_name=? COLLATE NOCASE AND id<>?').get(d,exceptUserId)
+    : db.prepare('SELECT 1 FROM users WHERE display_name=? COLLATE NOCASE').get(d));
+}
+
+export function createUser(displayName: string, password: string, isAdmin = false): PublicUser {
+  const clean=cleanAccountFields(displayName,password);
+  if(displayNameInUse(clean.displayName)) throw new Error('display_name_exists');
+  const info = db.prepare(`INSERT INTO users(hid,display_name,password_hash,is_admin) VALUES(?,?,?,?)`)
+    .run(newHid(), clean.displayName, hashPassword(clean.password), isAdmin ? 1 : 0);
   const id=Number(info.lastInsertRowid);
   db.prepare('INSERT OR IGNORE INTO user_privacy(user_id) VALUES(?)').run(id);
   return getUserById(id)!;
@@ -202,8 +213,8 @@ export function getUserById(id: number): PublicUser | null {
   return row ? publicUser(row) : null;
 }
 
-export function getUserForLogin(username: string): any | null {
-  return (db.prepare('SELECT * FROM users WHERE username=? COLLATE NOCASE').get(username) as any) ?? null;
+export function getUserForLogin(displayName: string): any | null {
+  return (db.prepare('SELECT * FROM users WHERE display_name=? COLLATE NOCASE').get(displayName.trim()) as any) ?? null;
 }
 
 export function listUsers(): PublicUser[] {
@@ -304,7 +315,7 @@ function fileForMessage(fileId: number | null): any | null {
 }
 
 export function messageById(id: number): MessageView | null {
-  const r = db.prepare(`SELECT m.*, u.hid,u.username,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(id) as any;
+  const r = db.prepare(`SELECT m.*, u.hid,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(id) as any;
   if (!r) return null;
   const receipts=(db.prepare('SELECT user_id,delivered_at,read_at FROM message_receipts WHERE message_id=? ORDER BY user_id').all(id) as any[]).map(x=>({
     userId:Number(x.user_id), deliveredAt:x.delivered_at?String(x.delivered_at):null, readAt:x.read_at?String(x.read_at):null
@@ -315,7 +326,7 @@ export function messageById(id: number): MessageView | null {
   const reactions=[...reactionMap.entries()].map(([emoji,userIds])=>({emoji,userIds}));
   let replyTo: ReplyPreview | null = null;
   if (r.reply_to_id) {
-    const q=db.prepare(`SELECT m.id,m.type,m.body,m.file_id,m.deleted_at,u.hid,u.username,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(Number(r.reply_to_id)) as any;
+    const q=db.prepare(`SELECT m.id,m.type,m.body,m.file_id,m.deleted_at,u.hid,u.display_name,u.avatar_url,u.is_admin FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(Number(r.reply_to_id)) as any;
     if(q) replyTo={id:Number(q.id),sender:publicUser(q),type:q.type,body:q.deleted_at?null:(q.body??null),file:q.deleted_at?null:fileForMessage(q.file_id?Number(q.file_id):null),deletedAt:q.deleted_at?String(q.deleted_at):null};
   }
   const deletedAt=r.deleted_at?String(r.deleted_at):null;
@@ -391,6 +402,15 @@ export function insertFile(ownerId:number, originalName:string, storedName:strin
 
 export function getFile(id:number): any | null { return (db.prepare('SELECT * FROM files WHERE id=?').get(id) as any) ?? null; }
 
+export function setDisplayName(userId:number, displayName:string): PublicUser {
+  const d=String(displayName ?? '').trim();
+  if(d.length<1 || d.length>64) throw new Error('invalid_display_name');
+  if(displayNameInUse(d,userId)) throw new Error('display_name_exists');
+  const info=db.prepare('UPDATE users SET display_name=? WHERE id=?').run(d,userId);
+  if(!info.changes) throw new Error('not_found');
+  return getUserById(userId)!;
+}
+
 export function setUserAvatar(userId:number,fileId:number): PublicUser {
   const f=db.prepare('SELECT * FROM files WHERE id=? AND owner_id=?').get(fileId,userId) as any;
   if(!f || !String(f.mime_type).startsWith('image/')) throw new Error('invalid_avatar');
@@ -463,7 +483,7 @@ function urlsFromText(text: string | null): string[] {
 export function conversationInventory(conversationId:number): ConversationInventory {
   const rows = db.prepare(`
     SELECT m.id,m.body,m.created_at,m.sender_id,m.file_id,
-           u.hid,u.username,u.display_name,u.avatar_url,u.is_admin,
+           u.hid,u.display_name,u.avatar_url,u.is_admin,
            f.original_name,f.mime_type,f.size
     FROM messages m
     JOIN users u ON u.id=m.sender_id
@@ -567,7 +587,7 @@ export function contactRequests(userId:number): ContactRequestsView {
 
 export function searchDirectory(userId:number,q:string): DirectoryUser[] {
   const term=q.trim(); const like=`%${term}%`;
-  const rows=(term?db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) AND (u.display_name LIKE ? COLLATE NOCASE OR u.username LIKE ? COLLATE NOCASE OR u.hid LIKE ? COLLATE NOCASE) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId,like,like,like):db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId)) as any[];
+  const rows=(term?db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) AND (u.display_name LIKE ? COLLATE NOCASE OR u.hid LIKE ? COLLATE NOCASE) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId,like,like):db.prepare(`SELECT u.* FROM users u LEFT JOIN user_privacy p ON p.user_id=u.id WHERE u.disabled=0 AND (u.id=? OR COALESCE(p.directory_visible,1)=1 OR EXISTS(SELECT 1 FROM contacts c WHERE c.user_id=? AND c.contact_id=u.id)) ORDER BY u.display_name COLLATE NOCASE LIMIT 100`).all(userId,userId)) as any[];
   return rows.map(row=>{
     const u=publicUser(row); let relationship:DirectoryUser['relationship']='none';
     if(u.id===userId) relationship='self';

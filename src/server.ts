@@ -14,7 +14,7 @@ import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
   acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
-  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
+  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setDisplayName, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
   userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists
 } from './db.js';
 import type { LinkPreview } from './types.js';
@@ -37,9 +37,9 @@ app.get('/homechat-root-ca.crt', (_req,res)=>{
 
 app.post('/api/setup', (req,res)=>{
   if (userCount() > 0) return res.status(409).json({error:'setup_complete'});
-  const {username,displayName,password} = req.body ?? {};
+  const {displayName,password} = req.body ?? {};
   try{
-    const user = createUser(String(username??''),String(displayName??''),password,true);
+    const user = createUser(String(displayName??''),password,true);
     const token = createSession(user.id);
     res.status(201).json({token,user});
   }catch(e:any){res.status(400).json({error:e?.message||'invalid_input'});}
@@ -49,28 +49,29 @@ app.get('/api/public-config',(_req,res)=>res.json(getServiceSettings()));
 app.post('/api/auth/register',(req,res)=>{
   const settings=getServiceSettings();
   if(!settings.registrationEnabled) return res.status(403).json({error:'registration_disabled'});
-  const {username,displayName,password,inviteCode}=req.body??{};
+  const {displayName,password,inviteCode}=req.body??{};
   const inviteHash=setting('registration_invite_hash','');
   if(inviteHash&&hashToken(String(inviteCode??''))!==inviteHash) return res.status(403).json({error:'invalid_invite'});
-  try{const user=createUser(String(username??''),String(displayName??''),password,false);res.status(201).json({token:createSession(user.id),user});}
-  catch(e:any){const code=e?.message==='invalid_username'||e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409;res.status(code).json({error:code===409?'username_exists':e?.message||'invalid_input'});}
+  try{const user=createUser(String(displayName??''),password,false);res.status(201).json({token:createSession(user.id),user});}
+  catch(e:any){const code=e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409;res.status(code).json({error:code===409?'display_name_exists':e?.message||'invalid_input'});}
 });
 
 app.post('/api/auth/login',(req,res)=>{
-  const {username,password} = req.body ?? {};
-  const row = typeof username === 'string' ? getUserForLogin(username) : null;
+  const {displayName,password} = req.body ?? {};
+  const row = typeof displayName === 'string' ? getUserForLogin(displayName) : null;
   if (!row || row.disabled || typeof password !== 'string' || !verifyPassword(password,row.password_hash)) return res.status(401).json({error:'invalid_credentials'});
   const user = getUserById(Number(row.id))!;
   res.json({token:createSession(user.id),user});
 });
 app.post('/api/auth/logout',requireAuth,(req,res)=>{ revokeToken(req.token!); res.status(204).end(); });
 app.get('/api/me',requireAuth,(req,res)=>res.json(req.user));
+app.patch('/api/me',requireAuth,(req,res)=>{try{res.json(setDisplayName(req.user!.id,String(req.body?.displayName??'')));}catch(e:any){const code=e?.message==='display_name_exists'?409:e?.message==='not_found'?404:400;res.status(code).json({error:e?.message||'invalid_display_name'});}});
 app.get('/api/users',requireAuth,(req,res)=>res.json(searchDirectory(req.user!.id,'').map(({relationship,...user})=>user)));
 app.post('/api/users',requireAuth,(req,res)=>{
   if (!req.user!.isAdmin) return res.status(403).json({error:'admin_required'});
-  const {username,displayName,password,isAdmin=false}=req.body ?? {};
-  try { res.status(201).json(createUser(String(username??''),String(displayName??''),password,Boolean(isAdmin))); }
-  catch(e:any) { const code=e?.message==='invalid_username'||e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409; res.status(code).json({error:code===409?'username_exists':e?.message||'invalid_input'}); }
+  const {displayName,password,isAdmin=false}=req.body ?? {};
+  try { res.status(201).json(createUser(String(displayName??''),password,Boolean(isAdmin))); }
+  catch(e:any) { const code=e?.message==='invalid_display_name'||e?.message==='invalid_password'?400:409; res.status(code).json({error:code===409?'display_name_exists':e?.message||'invalid_input'}); }
 });
 
 app.get('/api/me/privacy',requireAuth,(req,res)=>res.json(getPrivacy(req.user!.id)));

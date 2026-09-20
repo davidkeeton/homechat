@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 
-export type User = { id:number; hid:string; username:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
+export type User = { id:number; hid:string; displayName:string; avatarUrl:string|null; isAdmin:boolean };
 export type FileView = { id:number; name:string; mimeType:string; size:number; url:string };
 export type MessageReceipt = { userId:number; deliveredAt:string|null; readAt:string|null };
 export type MessageReaction = { emoji:string; userIds:number[] };
@@ -26,14 +26,14 @@ export class HomeClient {
   socket?: Socket;
   constructor(public baseUrl:string, public token:string) {}
 
-  static async login(baseUrl:string, username:string, password:string):Promise<LoginResponse> {
-    const r = await fetch(`${baseUrl}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password}) });
-    if (!r.ok) throw new Error('Invalid username or password');
+  static async login(baseUrl:string, displayName:string, password:string):Promise<LoginResponse> {
+    const r = await fetch(`${baseUrl}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName,password}) });
+    if (!r.ok) throw new Error('Invalid display name or password');
     return r.json();
   }
 
   static async publicConfig(baseUrl:string):Promise<PublicServiceConfig>{const r=await fetch(`${baseUrl}/api/public-config`);if(!r.ok)throw new Error('config_failed');return r.json();}
-  static async register(baseUrl:string, username:string, displayName:string, password:string, inviteCode=''):Promise<LoginResponse>{const r=await fetch(`${baseUrl}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,displayName,password,inviteCode})});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();}
+  static async register(baseUrl:string, displayName:string, password:string, inviteCode=''):Promise<LoginResponse>{const r=await fetch(`${baseUrl}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName,password,inviteCode})});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();}
 
   async api<T>(path:string, init:RequestInit={}):Promise<T> {
     const headers = new Headers(init.headers);
@@ -47,6 +47,7 @@ export class HomeClient {
   connect(){ this.socket = io(this.baseUrl,{auth:{token:this.token}}); return this.socket; }
   disconnect(){ this.socket?.disconnect(); }
   me(){ return this.api<User>('/api/me'); }
+  setDisplayName(displayName:string){return this.api<User>('/api/me',{method:'PATCH',body:JSON.stringify({displayName})});}
   users(){ return this.api<User[]>('/api/users'); }
   privacy(){return this.api<PrivacySettings>('/api/me/privacy');}
   setPrivacy(settings:Partial<PrivacySettings>){return this.api<PrivacySettings>('/api/me/privacy',{method:'PUT',body:JSON.stringify(settings)});}
@@ -76,7 +77,7 @@ export class HomeClient {
   renameGroup(conversationId:number,name:string){ return this.api<void>(`/api/conversations/${conversationId}/group`,{method:'PATCH',body:JSON.stringify({name})}); }
   addGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members`,{method:'POST',body:JSON.stringify({userId})}); }
   removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
-  createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
+  createUser(displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({displayName,password,isAdmin})}); }
   send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:send',{conversationId,body,fileId,clientNonce,replyToId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'send_failed')));}); }
   editMessage(messageId:number,body:string){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:edit',{messageId,body},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'edit_failed')));}); }
   deleteMessage(messageId:number){ return new Promise<Message>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.emit('message:delete',{messageId},(r:any)=>r?.ok?resolve(r.message):reject(new Error(r?.error??'delete_failed')));}); }

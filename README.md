@@ -1,8 +1,17 @@
 # HomeChat
 
-## v0.11.4 PWA / cross-platform test pass
+## v0.11.5 identity simplification
 
-HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.
+HomeChat now uses a single human-readable account name plus a permanent generated HID. The separate username field has been removed.
+
+- Register and sign in with **Display name + password**
+- Display names are unique case-insensitively (`Dave` and `dave` cannot both exist)
+- HID remains the permanent public identity
+- Display-name changes are checked against the same uniqueness rule
+- Admin-created users also need only display name + password
+- Directory search uses display name or HID
+
+The PWA/mobile work from v0.11.x remains unchanged:
 
 - Web app manifest and install metadata
 - Home-screen/app icons for Windows, Android and iOS
@@ -46,7 +55,7 @@ The private keys are never exposed by that route. After installing/trusting the 
 Windows/Android can then install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.4** (HTTP login certificate-install banner for LAN HTTPS setup).
+Current version: **0.11.5** (HTTP login certificate-install banner for LAN HTTPS setup).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
@@ -60,7 +69,7 @@ Recommended workflow:
 # Development machine / repository clone
 git status
 git add .
-git commit -m "HomeChat v0.11.4 certificate install banner"
+git commit -m "HomeChat v0.11.5 display-name identity"
 git push origin main
 ```
 
@@ -90,8 +99,8 @@ Keep the application version synchronized in the server health response, package
 After a version has been built and smoke-tested:
 
 ```bash
-git tag -a v0.11.4 -m "HomeChat v0.11.4"
-git push origin v0.11.4
+git tag -a v0.11.5 -m "HomeChat v0.11.5"
+git push origin v0.11.5
 ```
 
 Tags are useful checkpoints even while development continues directly on `main`.
@@ -149,11 +158,11 @@ TLS private keys and local CA private keys must also stay outside the repository
 ## v0.9 social + message interaction pass
 
 - Contact list and contact requests
-- Searchable user directory by name, username, or HID
+- Searchable user directory by display name or HID
 - Reply/quote messages
 - Edit your own text messages
 - Soft-delete your own messages
-- @username mention highlighting
+- display-name mention highlighting
 - Existing realtime, optimistic-send, reactions, receipts, pagination, media/files/links inventory, and details UI remain intact
 
 ## Overview
@@ -163,7 +172,7 @@ A small self-hosted household messenger with a built-in web client. HomeChat is 
 ### Details & identity
 - Reusable right-side Details / Media / Files / Links flyout
 - HID moved into contact/profile details with one-click copy
-- My Details panel with username, role and avatar change
+- My Details panel with HID, role, display-name edit and avatar change
 - Contact details from the chat header
 - Group details with rename, member list, add/remove member and leave-group controls
 - Flyout closes on Escape, conversation change, or when returning to the chat
@@ -220,7 +229,16 @@ Health check:
 curl http://localhost:8092/health
 ```
 
-Existing databases are upgraded automatically on startup. Existing users without an HID are assigned one automatically.
+**v0.11.5 intentionally does not migrate the old username-based user schema.** Before first start of this version, stop HomeChat, back up the appdata folder, then remove the pre-production SQLite database:
+
+```bash
+docker compose down
+cp -a /home/dkeeton/docker/appdata/homechat /home/dkeeton/docker/appdata/homechat-backup-pre-v0.11.5
+rm /home/dkeeton/docker/appdata/homechat/homechat.db*
+docker compose up -d --build
+```
+
+HomeChat will create a fresh database using unique display names and HIDs. TLS files and uploads under the appdata directory are not removed by the database reset.
 
 ## First account
 
@@ -229,7 +247,7 @@ The first account becomes administrator:
 ```bash
 curl -X POST http://localhost:8092/api/setup \
   -H 'Content-Type: application/json' \
-  -d '{"username":"dave","displayName":"Dave","password":"change-this-password"}'
+  -d '{"displayName":"Dave","password":"change-this-password"}'
 ```
 
 The response contains the user's generated HID and session token.
@@ -290,7 +308,7 @@ HomeChat is intended for LAN/VPN use. It does not currently provide end-to-end e
 - Global message search via the command palette (`Ctrl+K` / `Cmd+K`).
 - IRC-inspired command palette: `/msg -friend`, `/msg -hid`, `/saved`, `/contacts`, `/help`.
 - Persistent per-conversation drafts stored locally in the browser.
-- Group mention autocomplete for `@username`.
+- Group mention autocomplete using display names.
 - Block/unblock list with server-side enforcement for direct contact requests, direct-conversation creation, and direct messages.
 
 ## v0.10 identity, privacy and administration

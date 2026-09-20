@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const APP_VERSION = '0.11.4';
+export const APP_VERSION = '0.11.5';
 
 export const config = {
   port: Number(process.env.PORT ?? 3000),

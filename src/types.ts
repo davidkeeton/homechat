@@ -4,7 +4,6 @@ export type MessageType = 'text' | 'image' | 'file';
 export interface PublicUser {
   id: number;
   hid: string;
-  username: string;
   displayName: string;
   avatarUrl: string | null;
   isAdmin: boolean;
