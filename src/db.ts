@@ -482,13 +482,25 @@ export function setUserAvatar(userId:number,fileId:number): PublicUser {
   return getUserById(userId)!;
 }
 
+
+export function setGroupAvatar(conversationId:number,userId:number,fileId:number): string {
+  if (conversationType(conversationId)!=='group') throw new Error('not_group');
+  if (!isMember(conversationId,userId)) throw new Error('not_a_member');
+  const f=db.prepare('SELECT * FROM files WHERE id=? AND owner_id=?').get(fileId,userId) as any;
+  if(!f || !String(f.mime_type).startsWith('image/')) throw new Error('invalid_avatar');
+  const url=`/api/avatars/${fileId}`;
+  db.prepare('UPDATE conversations SET avatar_url=? WHERE id=?').run(url,conversationId);
+  return url;
+}
+
 export function getAvatarFile(fileId:number): any | null {
   const url=`/api/avatars/${fileId}`;
   return (db.prepare(`
     SELECT f.* FROM files f
-    JOIN users u ON u.avatar_url=?
-    WHERE f.id=? LIMIT 1
-  `).get(url,fileId) as any) ?? null;
+    LEFT JOIN users u ON u.avatar_url=?
+    LEFT JOIN conversations c ON c.avatar_url=?
+    WHERE f.id=? AND (u.id IS NOT NULL OR c.id IS NOT NULL) LIMIT 1
+  `).get(url,url,fileId) as any) ?? null;
 }
 
 export function conversationSummaries(userId:number): ConversationSummary[] {
@@ -836,6 +848,7 @@ export function pruneOrphanFiles(beforeIso:string): number {
     WHERE datetime(f.created_at) < datetime(?)
       AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id)
       AND NOT EXISTS(SELECT 1 FROM users u WHERE u.avatar_url='/api/avatars/' || f.id)
+      AND NOT EXISTS(SELECT 1 FROM conversations c WHERE c.avatar_url='/api/avatars/' || f.id)
   `).all(beforeIso) as any[];
   if(!rows.length)return 0;
   const del=db.prepare('DELETE FROM files WHERE id=?');

@@ -15,7 +15,7 @@ import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
   acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
-  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setDisplayName, setUserAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
+  deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setDisplayName, setUserAvatar, setGroupAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
   userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists, upsertPushSubscription, deletePushSubscription, pruneStalePushSubscriptions
 } from './db.js';
 import type { LinkPreview, MessageView } from './types.js';
@@ -282,6 +282,24 @@ app.post('/api/me/avatar',requireAuth,uploadSingle,(req,res)=>{
   try { res.json(setUserAvatar(req.user!.id,id)); }
   catch { res.status(400).json({error:'invalid_avatar'}); }
 });
+
+app.post('/api/conversations/:id/avatar',requireAuth,uploadSingle,(req,res)=>{
+  const cid=Number(req.params.id);
+  if (!isMember(cid,req.user!.id)) {
+    if(req.file){try{fs.unlinkSync(req.file.path);}catch{}}
+    return res.status(403).json({error:'not_a_member'});
+  }
+  if (!req.file) return res.status(400).json({error:'missing_file'});
+  const avatarTypes=new Set(['image/jpeg','image/png','image/webp','image/gif']);
+  if (!avatarTypes.has(String(req.file.mimetype)) || req.file.size>10*1024*1024) {
+    try { fs.unlinkSync(req.file.path); } catch {}
+    return res.status(400).json({error:req.file.size>10*1024*1024?'avatar_too_large':'avatar_must_be_raster_image'});
+  }
+  const id=insertFile(req.user!.id,req.file.originalname,req.file.filename,req.file.mimetype || 'application/octet-stream',req.file.size);
+  try { res.json({avatarUrl:setGroupAvatar(cid,req.user!.id,id)}); }
+  catch { res.status(400).json({error:'invalid_group_avatar'}); }
+});
+
 app.get('/api/avatars/:id',(req,res)=>{
   const fid=Number(req.params.id); const f=getAvatarFile(fid); if(!f) return res.status(404).end();
   res.setHeader('Cache-Control','public, max-age=86400');

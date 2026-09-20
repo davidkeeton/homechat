@@ -454,3 +454,5 @@ html.mobile-runtime .modal{width:100vw;max-width:none;max-height:none;height:100
   .sidebar-top{padding-top:max(10px,env(safe-area-inset-top));min-height:calc(94px + env(safe-area-inset-top))}
   .chat-head{padding-top:env(safe-area-inset-top);height:calc(64px + env(safe-area-inset-top))}
 }
+
+.file-button{display:block;text-align:center;cursor:pointer;box-sizing:border-box}

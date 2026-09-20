@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const APP_VERSION = '0.13.0';
+export const APP_VERSION = '0.13.1';
 
 const dataDir = path.resolve(process.env.DATA_DIR ?? './data');
 const tlsDir = path.resolve(process.env.TLS_DIR ?? path.join(dataDir,'tls'));

@@ -2,7 +2,7 @@
 
 HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, and an installable PWA for desktop and mobile.
 
-**Current version:** `0.13.0`
+**Current version:** `0.13.1`
 
 HomeChat is intended for LAN/VPN use. It is not currently designed to be exposed directly to the public Internet.
 
