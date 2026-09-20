@@ -1,6 +1,6 @@
 # HomeChat
 
-## v0.11.6 HTTP bootstrap + HTTPS app
+## v0.11.7 HTTP bootstrap + HTTPS app
 
 HomeChat now uses a single human-readable account name plus a permanent generated HID. The separate username field has been removed.
 
@@ -23,7 +23,7 @@ The PWA/mobile work from v0.11.x remains unchanged:
 
 ### Test server
 
-The current test host is `192.168.98.43`. v0.11.6 deliberately separates bootstrap/onboarding from the secure application:
+The current test host is `192.168.98.43`. v0.11.7 deliberately separates bootstrap/onboarding from the secure application:
 
     http://192.168.98.43:8092
 
@@ -63,7 +63,7 @@ Only the public root certificate is exposed by the HTTP bootstrap service. `home
 Once HTTPS is trusted, Windows/Android can install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.6** (HTTP bootstrap on 8092, secure HomeChat on 8093).
+Current version: **0.11.7** (HTTP bootstrap on 8092, secure HomeChat on 8093).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
@@ -77,7 +77,7 @@ Recommended workflow:
 # Development machine / repository clone
 git status
 git add .
-git commit -m "HomeChat v0.11.6 split HTTP bootstrap and HTTPS app"
+git commit -m "HomeChat v0.11.7 split HTTP bootstrap and HTTPS app"
 git push origin main
 ```
 
@@ -107,8 +107,8 @@ Keep the application version synchronized in the server health response, package
 After a version has been built and smoke-tested:
 
 ```bash
-git tag -a v0.11.6 -m "HomeChat v0.11.6"
-git push origin v0.11.6
+git tag -a v0.11.7 -m "HomeChat v0.11.7"
+git push origin v0.11.7
 ```
 
 Tags are useful checkpoints even while development continues directly on `main`.
