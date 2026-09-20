@@ -9,6 +9,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { Server as SocketServer } from 'socket.io';
 import { APP_VERSION, config } from './config.js';
+import { ensureTlsMaterial } from './tls.js';
 import { requireAuth } from './auth.js';
 import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
@@ -24,14 +25,19 @@ function bootstrapAdminFromEnvironment(): void {
   if (userCount() > 0) return;
 
   const displayName = String(process.env.HOMECHAT_ADMIN_NAME ?? '').trim();
-  const password = String(process.env.HOMECHAT_ADMIN_PASSWORD ?? '');
+  const passwordFile = String(process.env.HOMECHAT_ADMIN_PASSWORD_FILE ?? '').trim();
+  let password = String(process.env.HOMECHAT_ADMIN_PASSWORD ?? '');
+  if (passwordFile) {
+    if (!fs.existsSync(passwordFile)) throw new Error(`bootstrap_admin_password_file_missing: ${passwordFile}`);
+    password = fs.readFileSync(passwordFile,'utf8').replace(/[\r\n]+$/,'');
+  }
 
   if (!displayName && !password) {
-    console.warn('HomeChat: no users exist and no bootstrap administrator is configured. Use /api/setup or set HOMECHAT_ADMIN_NAME and HOMECHAT_ADMIN_PASSWORD.');
+    console.warn('HomeChat: no users exist and no bootstrap administrator is configured. Use /api/setup or configure HOMECHAT_ADMIN_NAME plus HOMECHAT_ADMIN_PASSWORD(_FILE).');
     return;
   }
   if (!displayName || !password) {
-    throw new Error('bootstrap_admin_config_incomplete: set both HOMECHAT_ADMIN_NAME and HOMECHAT_ADMIN_PASSWORD');
+    throw new Error('bootstrap_admin_config_incomplete: set HOMECHAT_ADMIN_NAME and HOMECHAT_ADMIN_PASSWORD or HOMECHAT_ADMIN_PASSWORD_FILE');
   }
 
   const user = createUser(displayName, password, true);
@@ -329,7 +335,9 @@ if (fs.existsSync(publicDir)) {
 // The real HomeChat app is HTTPS-only.  Port 8092 is intentionally kept as a
 // tiny HTTP bootstrap service so a new phone can download the private CA before
 // it has enough trust to open the secure app on 8093.
-const tlsReady=fs.existsSync(config.tlsCertFile)&&fs.existsSync(config.tlsKeyFile);
+let tlsReady=false;
+try { tlsReady=ensureTlsMaterial(); }
+catch (error) { console.error('HomeChat: automatic TLS setup failed', error); }
 const server=tlsReady
   ? https.createServer({cert:fs.readFileSync(config.tlsCertFile),key:fs.readFileSync(config.tlsKeyFile)},app)
   : null;
@@ -407,8 +415,9 @@ function cleanupStorage(): void {
 cleanupStorage();
 const cleanupTimer=setInterval(cleanupStorage,6*60*60*1000);(cleanupTimer as any).unref?.();
 
+const HTML_ESCAPES: Record<string,string> = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
 function htmlEscape(value:string): string {
-  return value.replace(/[&<>"']/g,ch=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch] ?? ch));
+  return value.replace(/[&<>"']/g,ch=>HTML_ESCAPES[ch] ?? ch);
 }
 
 const bootstrap=express();
@@ -422,10 +431,10 @@ bootstrap.get('/homechat-root-ca.crt',(_req,res)=>{
   res.sendFile(config.caCertFile);
 });
 bootstrap.get('/',(req,res)=>{
-  const host=htmlEscape(req.hostname || '192.168.98.43');
+  const host=htmlEscape(req.hostname || config.publicHost);
   const secureUrl=`https://${host}:${config.publicHttpsPort}/`;
   const ready=tlsReady&&fs.existsSync(config.caCertFile);
-  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>HomeChat secure setup</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08090e;color:#f4f5fb;font-family:system-ui,-apple-system,sans-serif}.card{width:min(430px,90vw);padding:28px;border:1px solid #303444;border-radius:20px;background:#12141d;box-shadow:0 30px 90px #0008}h1{margin:0 0 8px}p{color:#aeb4c6;line-height:1.5}.button{display:block;text-align:center;text-decoration:none;margin-top:14px;padding:13px 16px;border-radius:12px;background:#6d5dfc;color:white;font-weight:700}.secondary{background:#242837}.disabled{opacity:.45;pointer-events:none}.note{font-size:13px}</style></head><body><main class="card"><h1>HomeChat secure setup</h1><p>Install the HomeChat root certificate on this device, trust it as a root CA, then continue to the secure app.</p><a class="button${fs.existsSync(config.caCertFile)?'':' disabled'}" href="/homechat-root-ca.crt">Install certificate</a><a class="button secondary${tlsReady?'':' disabled'}" href="${secureUrl}">Continue to secure HomeChat</a>${ready?'':'<p class="note">TLS files are not ready yet. Generate them in the HomeChat appdata <code>tls</code> folder.</p>'}<p class="note">Secure HomeChat: ${secureUrl}</p></main></body></html>`);
+  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>HomeChat secure setup</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08090e;color:#f4f5fb;font-family:system-ui,-apple-system,sans-serif}.card{width:min(430px,90vw);padding:28px;border:1px solid #303444;border-radius:20px;background:#12141d;box-shadow:0 30px 90px #0008}h1{margin:0 0 8px}p{color:#aeb4c6;line-height:1.5}.button{display:block;text-align:center;text-decoration:none;margin-top:14px;padding:13px 16px;border-radius:12px;background:#6d5dfc;color:white;font-weight:700}.secondary{background:#242837}.disabled{opacity:.45;pointer-events:none}.note{font-size:13px}</style></head><body><main class="card"><h1>HomeChat secure setup</h1><p>Install the HomeChat root certificate on this device, trust it as a root CA, then continue to the secure app.</p><a class="button${fs.existsSync(config.caCertFile)?'':' disabled'}" href="/homechat-root-ca.crt">Install certificate</a><a class="button secondary${tlsReady?'':' disabled'}" href="${secureUrl}">Continue to secure HomeChat</a>${ready?'':'<p class="note">TLS files are not ready yet. Check HOMECHAT_HOST, HOMECHAT_AUTO_TLS, and the container logs.</p>'}<p class="note">Secure HomeChat: ${secureUrl}</p></main></body></html>`);
 });
 
 const bootstrapServer=http.createServer(bootstrap);

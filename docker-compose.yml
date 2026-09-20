@@ -4,21 +4,24 @@ services:
     container_name: homechat
     restart: unless-stopped
     environment:
-      TZ: America/Vancouver
+      TZ: ${TZ:-UTC}
       DATA_DIR: /app/data
       UPLOAD_DIR: /app/data/uploads
-      MAX_UPLOAD_BYTES: 104857600
-      SESSION_DAYS: 30
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      SESSION_DAYS: ${SESSION_DAYS:-30}
       HTTP_PORT: 3000
       HTTPS_PORT: 3001
-      PUBLIC_HTTPS_PORT: 8093
-      TLS_CERT_FILE: /app/data/tls/homechat.crt
-      TLS_KEY_FILE: /app/data/tls/homechat.key
-      CA_CERT_FILE: /app/data/tls/homechat-root-ca.crt
+      PUBLIC_HTTPS_PORT: ${HOMECHAT_HTTPS_PORT:-8093}
+      HOMECHAT_HOST: ${HOMECHAT_HOST:-localhost}
+      HOMECHAT_AUTO_TLS: ${HOMECHAT_AUTO_TLS:-true}
       HOMECHAT_ADMIN_NAME: ${HOMECHAT_ADMIN_NAME:-}
       HOMECHAT_ADMIN_PASSWORD: ${HOMECHAT_ADMIN_PASSWORD:-}
+      HOMECHAT_ADMIN_PASSWORD_FILE: ${HOMECHAT_ADMIN_PASSWORD_FILE:-}
     volumes:
-      - /home/dkeeton/docker/appdata/homechat:/app/data
+      - ${HOMECHAT_DATA_PATH:-homechat-data}:/app/data
     ports:
-      - "8092:3000"
-      - "8093:3001"
+      - "${HOMECHAT_HTTP_PORT:-8092}:3000"
+      - "${HOMECHAT_HTTPS_PORT:-8093}:3001"
+
+volumes:
+  homechat-data:

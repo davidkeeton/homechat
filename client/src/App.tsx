@@ -48,16 +48,19 @@ function Avatar({name,online=false,avatarUrl,size='normal',onClick}:{name:string
 function Login({onLogin}:{onLogin:(s:Session)=>void}){
   const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [inviteCode,setInviteCode]=useState('');
   const [error,setError]=useState(''); const [busy,setBusy]=useState(false); const [registering,setRegistering]=useState(false); const [publicConfig,setPublicConfig]=useState<{registrationEnabled:boolean;inviteRequired:boolean}|null>(null);
+  const [online,setOnline]=useState(()=>navigator.onLine);
   useEffect(()=>{HomeClient.publicConfig(BASE_URL).then(setPublicConfig).catch(()=>setPublicConfig({registrationEnabled:false,inviteRequired:false}));},[]);
-  async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const next=registering?await HomeClient.register(BASE_URL,displayName,password,inviteCode):await HomeClient.login(BASE_URL,displayName,password);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){setError(e.code==='display_name_exists'?'That display name is already in use.':e.message||'Sign in failed');}finally{setBusy(false);}}
+  useEffect(()=>{const on=()=>setOnline(true);const off=()=>setOnline(false);window.addEventListener('online',on);window.addEventListener('offline',off);return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};},[]);
+  async function submit(e:React.FormEvent){e.preventDefault();if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');return;}setBusy(true);setError('');try{const next=registering?await HomeClient.register(BASE_URL,displayName,password,inviteCode):await HomeClient.login(BASE_URL,displayName,password);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');}else setError(e.code==='display_name_exists'?'That display name is already in use.':e.message||'Sign in failed');}finally{setBusy(false);}}
   return <div className="login-shell"><form className="login-card" onSubmit={submit}>
     <div className="brand-mark">H</div><h1>HomeChat</h1><p>{registering?'Create your HomeChat account.':'Private chat for your home.'}</p>
     {window.location.protocol==='http:'&&<div className="cert-banner"><div><strong>Secure HomeChat setup</strong><span>Install the HomeChat certificate before connecting over HTTPS.</span></div><a href="/homechat-root-ca.crt">Install certificate</a></div>}
     <label>Display name<input autoFocus value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete={registering?'name':'username'} /></label>
     <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={registering?'new-password':'current-password'} /></label>
     {registering&&publicConfig?.inviteRequired&&<label>Invite code<input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} autoComplete="off" /></label>}
-    {error&&<div className="error">{error}</div>}
-    <button className="primary full" disabled={busy||!displayName.trim()||!password}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
+    {!online&&<div className="error">HomeChat is offline. Reconnect before signing in.</div>}
+    {error&&online&&<div className="error">{error}</div>}
+    <button className="primary full" disabled={!online||busy||!displayName.trim()||!password}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
     {publicConfig?.registrationEnabled&&<button type="button" className="login-switch" onClick={()=>{setRegistering(x=>!x);setError('')}}>{registering?'Already have an account? Sign in':'Create an account'}</button>}
   </form></div>;
 }

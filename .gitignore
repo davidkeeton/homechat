@@ -3,3 +3,8 @@ dist/
 data/
 .env
 *.log
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/

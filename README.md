@@ -1,26 +1,39 @@
 # HomeChat
 
-HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct messages, group chats, contacts, presence, file sharing, voice snippets, Saved Messages, and an installable web app for desktop and mobile.
+HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, and an installable PWA for desktop and mobile.
 
-**Current version:** `0.11.8`
+**Current version:** `0.12.0`
 
-HomeChat is designed for LAN/VPN use. It is not intended to be an Internet-scale public messaging service.
+HomeChat is intended for LAN/VPN use. It is not currently designed to be exposed directly to the public Internet.
+
+## What v0.12.0 changes
+
+v0.12.0 removes host-specific deployment assumptions and makes a fresh installation portable.
+
+- Docker now uses a managed `homechat-data` volume by default.
+- Host/IP and published ports are configured through `.env`.
+- TLS certificates are generated automatically on first start and persisted with HomeChat data.
+- Existing TLS material is reused; it is not regenerated on every restart.
+- First-admin bootstrap still supports environment variables and now also supports a password file.
+- Service-worker cache names are generated from the application version during the client build.
+- Old HomeChat service-worker caches are removed when a new worker activates.
+- The login screen reports an explicit offline state instead of a generic fetch failure.
+
+This release does **not** add Web Push yet. Existing in-app/browser notifications continue to work as before while HomeChat is active.
 
 ## Features
 
 - Direct messages and group chats
-- Permanent **HID** identity, for example `7A3F-19C2-B84D`
-- Unique display names used for sign-in and display
-- Saved Messages for private notes, links, images, and files
+- Permanent HID identity, for example `7A3F-19C2-B84D`
+- Unique display-name sign-in
+- Saved Messages
 - Contacts and contact requests
 - Searchable user directory by display name or HID
 - Presence and typing indicators
-- Delivered/read receipts
-- Unread counts and unread-message divider
+- Delivered/read receipts and unread counts
 - Message history pagination
-- Reactions
-- Reply/quote, edit, and soft-delete for messages
-- Clipboard image paste and drag/drop uploads
+- Reactions, replies, edit, and soft-delete
+- Image paste and drag/drop uploads
 - Inline image, video, and audio playback
 - Browser-recorded voice snippets
 - Per-conversation Media / Files / Links views
@@ -33,120 +46,58 @@ HomeChat is designed for LAN/VPN use. It is not intended to be an Internet-scale
 - Socket.IO realtime updates
 - Docker deployment
 
-## Identity and sign-in
-
-HomeChat uses two identity fields:
-
-- **Display name** — the human-readable name used to sign in and shown throughout the UI.
-- **HID** — a permanent generated public identifier.
-
-Display names are unique case-insensitively, so `Dave` and `dave` cannot both exist.
-
-Users sign in with:
-
-```text
-Display name
-Password
-```
-
-The HID does not change when a display name changes.
-
 ## Network layout
 
-The default Docker deployment exposes two ports:
+The default deployment exposes:
 
 ```text
-http://SERVER-IP:8092
-https://SERVER-IP:8093
+http://SERVER:8092
+https://SERVER:8093
 ```
 
-### Port 8092 — HTTP bootstrap
+### Port 8092 — bootstrap/onboarding
 
-Port `8092` is intentionally limited to setup/onboarding.
+Provides:
 
-It provides:
+- the certificate-install page
+- `homechat-root-ca.crt`
+- a link to secure HomeChat
+- `/health`
 
-- the HomeChat setup page
-- the public HomeChat root CA certificate
-- a link to the secure HomeChat site
-- a health check
-
-It does **not** serve login, chat, API, or Socket.IO traffic.
+It does not serve chat, login, API, or Socket.IO traffic.
 
 ### Port 8093 — secure HomeChat
 
-Port `8093` is the actual application.
-
-It provides:
-
-- login and registration
-- REST API
-- Socket.IO
-- messages and attachments
-- microphone access
-- service worker
-- installable PWA
+Provides the actual application, REST API, Socket.IO, attachments, service worker, and PWA functionality.
 
 ## Quick start
 
-### 1. Clone the repository
+### 1. Clone
 
 ```bash
 git clone https://github.com/davidkeeton/homechat.git
 cd homechat
 ```
 
-### 2. Create the appdata directory
+### 2. Configure
 
 ```bash
-mkdir -p /home/dkeeton/docker/appdata/homechat
+cp .env.example .env
 ```
 
-The default Compose configuration persists HomeChat data there.
-
-### 3. Generate the local TLS certificate
-
-For the current test server:
-
-```bash
-./tools/create-test-tls.sh 192.168.98.43
-```
-
-The generated files are stored under:
-
-```text
-/home/dkeeton/docker/appdata/homechat/tls/
-```
-
-Expected files include:
-
-```text
-homechat.crt
-homechat.key
-homechat-root-ca.crt
-homechat-root-ca.key
-```
-
-Private `.key` files must not be committed or exposed over HTTP.
-
-### 4. Configure the bootstrap administrator
-
-Create a local `.env` file beside `docker-compose.yml`:
+Edit `.env` and set at least the address clients will use:
 
 ```env
-HOMECHAT_ADMIN_NAME=Dave
+HOMECHAT_HOST=192.168.1.50
+HOMECHAT_HTTP_PORT=8092
+HOMECHAT_HTTPS_PORT=8093
+HOMECHAT_ADMIN_NAME=Admin
 HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
 ```
 
-`.env` is ignored by Git.
+`HOMECHAT_HOST` is used when generating the HTTPS certificate, so it should match the IP address or hostname users will enter in their browser.
 
-These values are **bootstrap-only**. HomeChat uses them only when the users table is empty. Once any user exists, changing these variables does not rename the administrator, reset a password, or create another user.
-
-If the database is empty and only one of the two variables is set, HomeChat refuses to start rather than creating an incomplete account.
-
-If neither variable is supplied, the first administrator can still be created through the fresh-install setup endpoint.
-
-### 5. Build and start
+### 3. Start
 
 ```bash
 docker compose up -d --build
@@ -156,334 +107,316 @@ Check startup:
 
 ```bash
 docker compose ps
-docker logs homechat --tail 50
+docker logs homechat --tail 100
 ```
 
-Expected host ports:
+On first start, HomeChat creates its local CA and server certificate automatically inside the persistent data volume.
 
-```text
-8092 -> HTTP bootstrap
-8093 -> HTTPS HomeChat
-```
-
-## First connection from a phone or computer
+### 4. Trust the HomeChat CA
 
 Open:
 
 ```text
-http://SERVER-IP:8092
+http://SERVER:8092
 ```
 
-Use **Install certificate** to download `homechat-root-ca.crt`.
-
-Trust that certificate as a root CA on the device, then continue to:
+Download and trust the HomeChat root certificate, then continue to:
 
 ```text
-https://SERVER-IP:8093
+https://SERVER:8093
 ```
 
-Only the public root certificate is served by the bootstrap page. Private keys are never web-accessible.
+Only the public CA certificate is exposed by the bootstrap server. Private keys are never served.
 
-### iOS
+## Persistent data
 
-After installing the certificate, iOS may require explicit trust:
-
-**Settings → General → About → Certificate Trust Settings**
-
-Enable full trust for the HomeChat root certificate.
-
-Then open the HTTPS HomeChat site in Safari.
-
-To add HomeChat to the home screen:
-
-**Share → Add to Home Screen**
-
-### Android
-
-Install the downloaded certificate as a trusted CA certificate, then open the HTTPS HomeChat site in Chrome.
-
-Use:
-
-**Chrome menu → Install app**
-
-or **Add to Home screen**, depending on the browser/device.
-
-### Windows
-
-After trusting the HomeChat CA, open the HTTPS site in Edge or Chrome and use the browser's **Install app** option.
-
-## Administration
-
-Administrators have access to a separate Administration screen.
-
-Current administration features include:
-
-- user, message, file, and storage statistics
-- enable/disable self-registration
-- optional registration invite code
-- attachment-size limit
-- create users and administrators
-- enable/disable accounts
-- reset user passwords
-- revoke sessions
-
-Disabled users have their sessions revoked and active sockets disconnected.
-
-## Self-registration
-
-Self-registration is disabled by default.
-
-Administrators can enable it from the Administration screen and optionally require an invite code.
-
-Registration requires:
+The default Compose configuration uses the Docker-managed volume:
 
 ```text
-Display name
-Password
+homechat-data
 ```
 
-New accounts receive a generated HID automatically.
-
-## Contacts and direct messages
-
-Incoming contact/chat requests appear in the main Chats view rather than being hidden only inside Contacts.
-
-Accepting a request creates or opens the direct conversation.
-
-Accepted contacts can message each other even when the recipient is offline, unless one user has blocked the other.
-
-Messages are submitted through the authenticated HTTP API and stored server-side. Socket.IO handles realtime delivery, presence, typing, receipts, and other live events.
-
-## Privacy
-
-Each user can configure:
-
-- direct-message policy
-- contact-request policy
-- presence visibility
-- directory visibility
-
-Blocking is enforced server-side for contact requests and direct messaging.
-
-## Files and media
-
-HomeChat supports:
-
-- file uploads
-- image paste
-- drag/drop upload
-- inline images
-- inline video
-- inline audio
-- voice snippets
-- Media / Files / Links inventories
-
-The upload limit starts from `MAX_UPLOAD_BYTES` and can later be changed from Administration.
-
-## Voice snippets
-
-Voice recording uses the browser `MediaRecorder` API.
-
-Microphone capture requires a secure browser context, which is why the main HomeChat application is served over HTTPS.
-
-## Saved Messages
-
-Saved Messages is a private conversation with yourself for:
-
-- notes
-- links
-- images
-- files
-- voice snippets
-
-## Data and backups
-
-Persistent data is stored under:
+It is mounted inside the container at:
 
 ```text
-/home/dkeeton/docker/appdata/homechat
+/app/data
 ```
 
-This includes the SQLite database, uploads, and TLS material.
+This contains the SQLite database, uploads, and TLS material.
 
-Back up that directory before making destructive database changes.
+Docker manages the host-side storage location, so HomeChat no longer requires a specific user's home directory.
 
-Example:
+### Optional bind mount
+
+If you prefer a specific host path, set `HOMECHAT_DATA_PATH` in `.env`:
+
+```env
+HOMECHAT_DATA_PATH=/srv/homechat
+```
+
+The same Compose file accepts either a Docker named volume or an absolute host path.
+
+## Upgrading an existing v0.11.x installation
+
+v0.11.x used a host bind mount. To keep using the existing data without copying anything, set that existing path before starting v0.12.0:
+
+```env
+HOMECHAT_DATA_PATH=/path/to/your/existing/homechat/appdata
+```
+
+Then deploy normally:
 
 ```bash
 docker compose down
-
-cp -a /home/dkeeton/docker/appdata/homechat       /home/dkeeton/docker/appdata/homechat-backup
-
-docker compose up -d
+git pull --ff-only
+docker compose up -d --build
 ```
+
+Do **not** omit `HOMECHAT_DATA_PATH` on the first v0.12.0 start if you expect HomeChat to use an existing bind-mounted database. If it is omitted, Docker creates/uses the new `homechat-data` volume and HomeChat will look like a fresh installation. The old bind-mounted files are not deleted.
+
+After confirming the upgrade, you can continue using the bind path indefinitely or migrate the data into the named volume later.
+
+## Automatic TLS
+
+By default:
+
+```env
+HOMECHAT_AUTO_TLS=true
+```
+
+If the CA/server certificates do not exist, HomeChat generates:
+
+```text
+/app/data/tls/homechat-root-ca.crt
+/app/data/tls/homechat-root-ca.key
+/app/data/tls/homechat.crt
+/app/data/tls/homechat.key
+```
+
+The server certificate includes `HOMECHAT_HOST`, plus localhost/127.0.0.1, in its Subject Alternative Names.
+
+Existing certificates are reused.
+
+To manage certificates yourself:
+
+```env
+HOMECHAT_AUTO_TLS=false
+```
+
+and provide the expected certificate/key files in the data directory or override their paths with the corresponding environment variables.
+
+`tools/create-test-tls.sh` remains available for manual certificate creation and no longer contains a user-specific output path.
+
+## First administrator
+
+On an empty database, HomeChat can create the first administrator from:
+
+```env
+HOMECHAT_ADMIN_NAME=Admin
+HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
+```
+
+These settings are bootstrap-only. Once any user exists, they are ignored and cannot rename an account or reset its password.
+
+For secret-file based deployments, set:
+
+```env
+HOMECHAT_ADMIN_NAME=Admin
+HOMECHAT_ADMIN_PASSWORD_FILE=/run/secrets/homechat_admin_password
+```
+
+The password file takes precedence over `HOMECHAT_ADMIN_PASSWORD`.
+
+If no bootstrap administrator is configured, `/api/setup` remains available only while the user table is empty.
+
+## Identity and sign-in
+
+A HomeChat account has:
+
+- **Display name** — used for sign-in and shown in the UI
+- **HID** — permanent generated public identity
+
+Display names are unique case-insensitively. The HID remains unchanged if a display name changes.
+
+## Administration
+
+Administrators can:
+
+- view user/message/file/storage statistics
+- enable or disable self-registration
+- require an optional invite code
+- change the attachment-size limit
+- create users/admins
+- enable/disable accounts
+- reset passwords
+- revoke sessions
+
+## PWA and mobile installation
+
+### iPhone/iPad
+
+1. Open the HTTPS HomeChat site in Safari.
+2. Tap **Share**.
+3. Choose **Add to Home Screen**.
+
+After installing the CA certificate, iOS may also require:
+
+**Settings → General → About → Certificate Trust Settings → Full Trust**
+
+### Android
+
+Open the HTTPS site in Chrome and use **Install app** or **Add to Home screen**.
+
+### Windows
+
+Open the HTTPS site in Edge/Chrome and use the browser's **Install app** action.
+
+## Service-worker updates
+
+The client build generates `public/sw.js` from `sw.template.js` using the version in `client/package.json`.
+
+For v0.12.0 the cache name is generated as:
+
+```text
+homechat-v0.12.0
+```
+
+When a new service worker activates, older `homechat-*` caches are removed automatically.
+
+Do not manually maintain the cache version string.
+
+## Notifications
+
+Current notifications use the browser Notification API when a realtime message reaches the active HomeChat client.
+
+That means notifications work while the PWA/browser is alive, but a fully suspended or closed PWA cannot currently be awakened for a new message.
+
+Background Web Push (VAPID + push subscriptions + service-worker push handling) is planned separately. It is intentionally not part of the v0.12.0 portability release.
+
+## Offline behavior
+
+The cached PWA shell can load without a network connection, but authentication requires the server.
+
+When HomeChat is offline, the sign-in screen now reports:
+
+```text
+HomeChat is offline. Reconnect before signing in.
+```
+
+Offline message queuing is not currently implemented.
+
+## Backup
+
+For a bind-mounted installation, back up the configured data directory.
+
+For the default Docker volume, inspect it with:
+
+```bash
+docker volume inspect homechat_homechat-data
+```
+
+The exact Docker volume name may include the Compose project prefix.
+
+Stop HomeChat before taking a filesystem-level copy of the SQLite database if you want a simple consistent backup.
 
 ## Updating
 
-On the Docker host:
-
 ```bash
-cd ~/docker/homechat
 git pull --ff-only
 docker compose down
 docker compose up -d --build
 ```
 
-Check the result:
+Then verify:
 
 ```bash
 docker compose ps
-docker logs homechat --tail 50
+docker logs homechat --tail 100
 ```
 
 ## Health checks
 
-HTTP bootstrap:
+Bootstrap:
 
 ```bash
-curl http://localhost:8092/health
+curl http://SERVER:8092/health
 ```
 
-Secure application:
+Secure application after trusting the CA:
 
 ```bash
-curl --cacert /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt   https://192.168.98.43:8093/health
+curl https://SERVER:8093/health
 ```
 
 ## Version control
 
-`main` is currently the active development branch and source of truth.
+`main` is the active development branch.
 
-A typical development release:
+Typical release workflow:
 
 ```bash
 git status
 git add .
-git commit -m "HomeChat v0.11.8"
+git commit -m "HomeChat v0.12.0 portable deployment"
 git push origin main
 ```
 
-After a release has been tested, it can be tagged:
+After testing:
 
 ```bash
-git tag -a v0.11.8 -m "HomeChat v0.11.8"
-git push origin v0.11.8
+git tag -a v0.12.0 -m "HomeChat v0.12.0"
+git push origin v0.12.0
 ```
-
-Versioning currently follows:
-
-- `0.x.0` — feature or milestone release
-- `0.x.y` — bug-fix or stabilization release
-- `1.0.0` — reserved for a later stable release
 
 ## Files that must not be committed
 
-Keep runtime data, secrets, and generated build artifacts out of Git.
-
-At minimum:
-
 ```text
 .env
+secrets/
 node_modules/
 dist/
-client/dist/
+data/
 *.db
 *.sqlite
 *.sqlite3
-uploads/
-data/
-appdata/
 *.key
 *.pem
 *.p12
 *.pfx
 ```
 
-Public certificate files can be shared when required, but private server keys and private CA keys must remain private.
-
-## Notable API endpoints
-
-```text
-POST /api/setup
-POST /api/auth/login
-POST /api/auth/logout
-GET  /api/me
-GET  /api/users
-POST /api/users
-GET  /api/conversations
-POST /api/conversations/self
-POST /api/conversations/direct
-POST /api/conversations/group
-GET  /api/conversations/:id/messages
-GET  /api/conversations/:id/inventory
-POST /api/files
-GET  /api/files/:id
-GET  /api/link-preview?url=...
-```
-
-`POST /api/setup` is only available while the database has no users.
+Private TLS keys and administrator secrets must remain private.
 
 ## Security notes
 
-HomeChat is intended for trusted LAN/VPN environments.
+HomeChat currently provides authenticated API access, server-side privacy/block enforcement, session revocation, upload limits, basic HTTP hardening, and link-preview SSRF restrictions.
 
-Current protections include:
-
-- authenticated API access
-- server-side privacy/block enforcement
-- session revocation
-- attachment-size enforcement
-- basic HTTP hardening headers
-- link-preview SSRF restrictions
-- separation of HTTP certificate bootstrap from the HTTPS application
-
-HomeChat does **not** currently provide:
+It does not currently provide:
 
 - end-to-end encryption
 - Internet-scale abuse protection
-- native mobile push notifications
+- background Web Push notifications
+- native mobile push
 - voice/video calling
-
-Do not expose HomeChat directly to the public Internet without additional review and hardening.
 
 ## Troubleshooting
 
-### Container exits with `legacy_username_database`
+### HomeChat looks like a fresh install after upgrading
 
-The current identity model no longer uses the old username-based schema.
+Check whether the new deployment is using `homechat-data` instead of the previous bind-mounted data path.
 
-For a disposable pre-production database, stop HomeChat, back up appdata, and remove the old SQLite database:
+Set the old path in `.env`:
 
-```bash
-docker compose down
-
-cp -a /home/dkeeton/docker/appdata/homechat       /home/dkeeton/docker/appdata/homechat-backup-pre-v0.11.5
-
-rm -f /home/dkeeton/docker/appdata/homechat/homechat.db*
-
-docker compose up -d --build
+```env
+HOMECHAT_DATA_PATH=/path/to/existing/appdata
 ```
 
-Do not use this procedure on a database whose data must be preserved.
+and restart.
 
-### HTTPS certificate error
+### HTTPS certificate name error
 
-Confirm:
-
-1. the TLS files exist under `/home/dkeeton/docker/appdata/homechat/tls/`
-2. the HomeChat root CA is installed and trusted on the client
-3. the certificate was generated for the IP/hostname being used
-4. the secure site is being opened on port `8093`
+Confirm `HOMECHAT_HOST` matches the address being used in the browser. If you change the host after certificates have already been generated, remove/regenerate only the server certificate deliberately or use the manual TLS helper. Do not casually delete the root CA if devices already trust it.
 
 ### No administrator exists
 
-On a fresh database, set:
-
-```env
-HOMECHAT_ADMIN_NAME=Dave
-HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
-```
-
-and restart HomeChat.
-
-If no bootstrap variables are configured and the database is still empty, `/api/setup` can be used once to create the first administrator.
+On an empty database, configure `HOMECHAT_ADMIN_NAME` plus either `HOMECHAT_ADMIN_PASSWORD` or `HOMECHAT_ADMIN_PASSWORD_FILE`, then restart. `/api/setup` is also available until the first user is created.
