@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feature/windows-client
+      - main
     tags:
       - 'v*'
 
@@ -12,31 +12,47 @@ jobs:
   build-windows:
     runs-on: windows-latest
 
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - name: Install Node
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '22'
+          package-manager-cache: false
 
-      - name: Install Rust
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install web client dependencies
+        shell: bash
         run: npm install --prefix client
 
       - name: Install desktop dependencies
+        shell: bash
         run: npm install --prefix desktop
 
-      - name: Build Windows client
+      - name: Build HomeChat Windows client
+        shell: bash
         run: npm --prefix desktop run build
 
-      - name: Upload installers
+      - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: HomeChat-Windows
+          name: homechat-windows
+          if-no-files-found: error
           path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Attach installers to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/msi/*.msi
