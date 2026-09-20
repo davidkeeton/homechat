@@ -1,5 +1,13 @@
 # HomeChat
 
+## v0.11.2 chat request / composer fix
+
+- Incoming contact requests now appear at the top of the normal chat list as **Chat request** entries instead of being hidden inside Contacts.
+- Opening a request shows an in-chat Accept / Decline screen.
+- Accepting a request now creates (or reuses) the direct conversation immediately and opens it, so messaging is available as soon as the contact relationship is accepted.
+- Contact/request changes are pushed over Socket.IO so the other client refreshes without needing to reopen Contacts.
+- Fixed long-history conversations pushing the message composer outside the visible chat panel on mobile/desktop by constraining the flex/grid scroll area.
+
 ## v0.11.1 PWA / cross-platform test pass
 
 HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.

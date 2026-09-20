@@ -95,12 +95,42 @@ app.get('/api/directory',requireAuth,(req,res)=>res.json(searchDirectory(req.use
 app.get('/api/search/messages',requireAuth,(req,res)=>res.json(searchMessages(req.user!.id,String(req.query.q??''),Number(req.query.limit??50))));
 app.post('/api/contact-requests',requireAuth,(req,res)=>{
   const uid=Number(req.body?.userId); if(!uid) return res.status(400).json({error:'invalid_user'});
-  try{sendContactRequest(req.user!.id,uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
+  try{
+    sendContactRequest(req.user!.id,uid);
+    const nowContacts=listContacts(req.user!.id).some(u=>u.id===uid);
+    if(nowContacts){
+      const id=findOrCreateDirect(req.user!.id,uid);
+      syncPresenceVisibility(uid);syncPresenceVisibility(req.user!.id);
+      io.to(roomForUser(uid)).emit('contacts:changed',{kind:'accepted',userId:req.user!.id,conversationId:id});
+      io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'accepted',userId:uid,conversationId:id});
+    }else{
+      io.to(roomForUser(uid)).emit('contacts:changed',{kind:'incoming',userId:req.user!.id});
+      io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'outgoing',userId:uid});
+    }
+    res.status(204).end();
+  }catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
 });
 app.post('/api/contact-requests/:id/accept',requireAuth,(req,res)=>{
-  try{const before=contactRequests(req.user!.id).incoming.find(x=>x.id===Number(req.params.id));acceptContactRequest(Number(req.params.id),req.user!.id);if(before){syncPresenceVisibility(before.sender.id);syncPresenceVisibility(req.user!.id);}res.status(204).end();}catch{res.status(404).json({error:'request_not_found'});}
+  try{
+    const requestId=Number(req.params.id);
+    const before=contactRequests(req.user!.id).incoming.find(x=>x.id===requestId);
+    if(!before) return res.status(404).json({error:'request_not_found'});
+    acceptContactRequest(requestId,req.user!.id);
+    const id=findOrCreateDirect(req.user!.id,before.sender.id);
+    syncPresenceVisibility(before.sender.id);syncPresenceVisibility(req.user!.id);
+    io.to(roomForUser(before.sender.id)).emit('contacts:changed',{kind:'accepted',userId:req.user!.id,conversationId:id});
+    io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'accepted',userId:before.sender.id,conversationId:id});
+    res.json({id});
+  }catch{res.status(404).json({error:'request_not_found'});}
 });
-app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{declineContactRequest(Number(req.params.id),req.user!.id);res.status(204).end();});
+app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{
+  const requestId=Number(req.params.id);
+  const all=contactRequests(req.user!.id);
+  const before=all.incoming.find(x=>x.id===requestId)??all.outgoing.find(x=>x.id===requestId);
+  declineContactRequest(requestId,req.user!.id);
+  if(before){const other=before.sender.id===req.user!.id?before.recipient.id:before.sender.id;io.to(roomForUser(other)).emit('contacts:changed',{kind:'declined',userId:req.user!.id});io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'declined',userId:other});}
+  res.status(204).end();
+});
 app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{const other=Number(req.params.userId);removeContact(req.user!.id,other);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(other);res.status(204).end();});
 app.get('/api/blocks',requireAuth,(req,res)=>res.json(listBlocked(req.user!.id)));
 app.post('/api/blocks',requireAuth,(req,res)=>{const uid=Number(req.body?.userId);try{blockUser(req.user!.id,uid);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(uid);res.status(204).end();}catch(e:any){res.status(400).json({error:e?.message||'block_failed'});}});
