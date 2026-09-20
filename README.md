@@ -2,7 +2,7 @@
 
 HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, background notifications, and an installable PWA for desktop and mobile.
 
-**Current version:** `0.14.0`
+**Current version:** `0.15.0`
 
 HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly to the public Internet without additional hardening.
 
@@ -30,6 +30,7 @@ HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly 
 - Privacy controls and block list
 - Administration screen
 - Installable PWA for Windows, Android, and iOS
+- Native Windows desktop client with system tray and Windows notifications
 - Web Push notifications for installed/backgrounded clients
 - SQLite persistence
 - Socket.IO realtime updates
@@ -238,6 +239,51 @@ The HomeChat server needs outbound HTTPS access to browser push services.
 
 On iPhone and iPad, background Web Push requires HomeChat to be installed to the Home Screen and notification permission to be granted from the installed web app.
 
+
+## Windows desktop client
+
+HomeChat includes a Tauri-based Windows client in `desktop/`. It reuses the same React chat UI and connects to the same HomeChat server API and Socket.IO service.
+
+The first time the desktop client starts, enter the secure HomeChat server address, for example:
+
+```text
+https://192.168.1.50:8093
+```
+
+The HomeChat CA certificate must already be trusted by Windows. The desktop client does not bypass TLS certificate validation.
+
+Closing the main window hides HomeChat to the Windows system tray instead of terminating it. This keeps the Socket.IO connection alive so the desktop client can receive messages and display native Windows notifications while the window is hidden. Use **Quit HomeChat** from the tray menu to stop the client completely.
+
+### Build locally on Windows
+
+Tauri requires the Microsoft C++ build tools, WebView2, Rust, and Node.js. WebView2 is already present on current Windows versions.
+
+Install the JavaScript dependencies:
+
+```powershell
+npm install --prefix client
+npm install --prefix desktop
+```
+
+Build the Windows installers:
+
+```powershell
+npm --prefix desktop run build
+```
+
+Tauri produces NSIS (`-setup.exe`) and MSI installers under:
+
+```text
+desktop/src-tauri/target/release/bundle/nsis/
+desktop/src-tauri/target/release/bundle/msi/
+```
+
+Unsigned development builds may trigger Microsoft SmartScreen. Code signing can be added later for public distribution.
+
+### Build with GitHub Actions
+
+The repository includes `.github/workflows/windows-client.yml`. Run **Build Windows client** manually from GitHub Actions, or push a version tag. The workflow builds both Windows installer formats and uploads them as artifacts. Tagged builds are also attached to the GitHub release.
+
 ## Administration
 
 Administrators can:
@@ -348,15 +394,15 @@ Typical release workflow:
 ```bash
 git status
 git add .
-git commit -m "HomeChat v0.14.0"
+git commit -m "HomeChat v0.15.0"
 git push origin main
 ```
 
 After testing:
 
 ```bash
-git tag -a v0.14.0 -m "HomeChat v0.14.0"
-git push origin v0.14.0
+git tag -a v0.15.0 -m "HomeChat v0.15.0"
+git push origin v0.15.0
 ```
 
 ## Files that must not be committed
