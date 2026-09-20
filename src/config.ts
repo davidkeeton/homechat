@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const APP_VERSION = '0.11.7';
+export const APP_VERSION = '0.11.8';
 
 export const config = {
   host: process.env.HOST ?? '0.0.0.0',

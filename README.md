@@ -1,6 +1,14 @@
 # HomeChat
 
-## v0.11.7 HTTP bootstrap + HTTPS app
+## v0.11.8 bootstrap administrator environment variables
+
+Fresh installations can now create the first administrator automatically from local environment variables. This is intentionally bootstrap-only: once any user exists, the variables are ignored and can never overwrite an existing account or password.
+
+- `HOMECHAT_ADMIN_NAME` sets the first administrator display name
+- `HOMECHAT_ADMIN_PASSWORD` sets the first administrator password
+- `.env` remains local and ignored by Git
+- `.env.example` documents the two variables without containing a real secret
+- `/api/setup` remains available only as a fresh-database fallback
 
 HomeChat now uses a single human-readable account name plus a permanent generated HID. The separate username field has been removed.
 
@@ -23,7 +31,7 @@ The PWA/mobile work from v0.11.x remains unchanged:
 
 ### Test server
 
-The current test host is `192.168.98.43`. v0.11.7 deliberately separates bootstrap/onboarding from the secure application:
+The current test host is `192.168.98.43`. HomeChat separates bootstrap/onboarding from the secure application:
 
     http://192.168.98.43:8092
 
@@ -63,7 +71,7 @@ Only the public root certificate is exposed by the HTTP bootstrap service. `home
 Once HTTPS is trusted, Windows/Android can install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.7** (HTTP bootstrap on 8092, secure HomeChat on 8093).
+Current version: **0.11.8** (HTTP bootstrap on 8092, secure HomeChat on 8093).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
@@ -77,7 +85,7 @@ Recommended workflow:
 # Development machine / repository clone
 git status
 git add .
-git commit -m "HomeChat v0.11.7 split HTTP bootstrap and HTTPS app"
+git commit -m "HomeChat v0.11.8 bootstrap administrator environment variables"
 git push origin main
 ```
 
@@ -107,8 +115,8 @@ Keep the application version synchronized in the server health response, package
 After a version has been built and smoke-tested:
 
 ```bash
-git tag -a v0.11.7 -m "HomeChat v0.11.7"
-git push origin v0.11.7
+git tag -a v0.11.8 -m "HomeChat v0.11.8"
+git push origin v0.11.8
 ```
 
 Tags are useful checkpoints even while development continues directly on `main`.
@@ -260,9 +268,22 @@ docker compose up -d --build
 
 HomeChat will create a fresh database using unique display names and HIDs. TLS files and uploads under the appdata directory are not removed by the database reset.
 
-## First account
+## First administrator
 
-The first account becomes administrator:
+The preferred first-run setup is a local `.env` file beside `docker-compose.yml`:
+
+```env
+HOMECHAT_ADMIN_NAME=Dave
+HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
+```
+
+`docker-compose.yml` passes these values into the container. They are **bootstrap-only**: HomeChat checks them only when the users table is empty. If any user already exists, both variables are ignored. Updating `.env` later therefore does not rename the administrator, reset a password, or create a duplicate user.
+
+`.env` is ignored by Git. `.env.example` is included as a template and contains no real secret.
+
+On a completely fresh database, startup creates the configured display name as the first administrator and generates its HID normally. HomeChat never logs the bootstrap password.
+
+If the variables are omitted, `/api/setup` remains available while the users table is empty as a manual fallback:
 
 ```bash
 curl --cacert /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt -X POST https://192.168.98.43:8093/api/setup \
@@ -270,7 +291,7 @@ curl --cacert /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt -X 
   -d '{"displayName":"Dave","password":"change-this-password"}'
 ```
 
-The response contains the user's generated HID and session token.
+If only one of `HOMECHAT_ADMIN_NAME` or `HOMECHAT_ADMIN_PASSWORD` is provided on an empty database, HomeChat fails startup with a clear configuration error rather than creating a partial account.
 
 ## Notable REST API
 

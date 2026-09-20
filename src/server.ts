@@ -19,6 +19,27 @@ import {
 } from './db.js';
 import type { LinkPreview } from './types.js';
 
+
+function bootstrapAdminFromEnvironment(): void {
+  if (userCount() > 0) return;
+
+  const displayName = String(process.env.HOMECHAT_ADMIN_NAME ?? '').trim();
+  const password = String(process.env.HOMECHAT_ADMIN_PASSWORD ?? '');
+
+  if (!displayName && !password) {
+    console.warn('HomeChat: no users exist and no bootstrap administrator is configured. Use /api/setup or set HOMECHAT_ADMIN_NAME and HOMECHAT_ADMIN_PASSWORD.');
+    return;
+  }
+  if (!displayName || !password) {
+    throw new Error('bootstrap_admin_config_incomplete: set both HOMECHAT_ADMIN_NAME and HOMECHAT_ADMIN_PASSWORD');
+  }
+
+  const user = createUser(displayName, password, true);
+  console.log(`HomeChat ${APP_VERSION}: created bootstrap administrator ${user.displayName} (${user.hid})`);
+}
+
+bootstrapAdminFromEnvironment();
+
 const app = express();
 app.disable('x-powered-by');
 app.use(cors({origin:true,credentials:true}));
