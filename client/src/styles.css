@@ -519,3 +519,5 @@ button:active:not(:disabled),.conversation:active,.attachment.image:active{trans
   .stamp{color:rgba(255,255,255,.82)}
   .message-row.theirs .stamp{color:var(--text-faint)}
 }
+
+.desktop-server-note{display:block;margin-top:6px;color:var(--text-dim);font-size:12px;line-height:1.45}

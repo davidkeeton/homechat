@@ -1,5 +1,5 @@
 // Generated from sw.template.js during npm run build/dev.
-const CACHE = 'homechat-v0.14.0';
+const CACHE = 'homechat-v0.15.0';
 const CORE = ['/', '/manifest.webmanifest', '/icons/homechat-192.png', '/icons/homechat-512.png'];
 
 self.addEventListener('install', event => {
