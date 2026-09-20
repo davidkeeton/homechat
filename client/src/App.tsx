@@ -28,6 +28,7 @@ const URL_RE = /https?:\/\/[^\s<>'"`]+/gi;
 const DEVICE_ID=(()=>{const key='homechat.deviceId';let id=localStorage.getItem(key);if(!id){id=crypto.randomUUID();localStorage.setItem(key,id);}return id;})();
 type BeforeInstallPromptEvent = Event & { prompt:()=>Promise<void>; userChoice:Promise<{outcome:'accepted'|'dismissed';platform:string}> };
 function isIos(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
+function isWindowsDesktop(){return !IS_DESKTOP && /Windows NT/i.test(navigator.userAgent) && !/Mobile|Phone|Tablet/i.test(navigator.userAgent);}
 function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||Boolean((navigator as any).standalone);}
 function base64UrlToBytes(value:string){const pad='='.repeat((4-value.length%4)%4);const b64=(value+pad).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(b64);return Uint8Array.from(raw,c=>c.charCodeAt(0));}
 
@@ -75,6 +76,7 @@ function Login({onLogin}:{onLogin:(s:Session)=>void}){
     {!online&&<div className="error">HomeChat is offline. Reconnect before signing in.</div>}
     {error&&online&&<div className="error">{error}</div>}
     <button className="primary full" disabled={!online||busy||!displayName.trim()||!password||(IS_DESKTOP&&!baseUrl)}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
+    {isWindowsDesktop()&&<a className="login-switch" href="/downloads/HomeChat-Windows-Setup.exe" download>Download HomeChat for Windows</a>}
     {publicConfig?.registrationEnabled&&<button type="button" className="login-switch" onClick={()=>{setRegistering(x=>!x);setError('')}}>{registering?'Already have an account? Sign in':'Create an account'}</button>}
   </form></div>;
 }

@@ -55,6 +55,15 @@ app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.
 const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
 app.get('/health', (_req,res)=>res.json({ok:true,version:APP_VERSION}));
 
+const windowsClientFile = path.join(config.dataDir,'downloads','HomeChat-Windows-Setup.exe');
+app.get('/downloads/HomeChat-Windows-Setup.exe', (_req,res)=>{
+  if(!fs.existsSync(windowsClientFile)) return res.status(404).type('text/plain').send('HomeChat Windows installer is not available yet.');
+  res.type('application/vnd.microsoft.portable-executable');
+  res.setHeader('Content-Disposition','attachment; filename="HomeChat-Windows-Setup.exe"');
+  res.setHeader('Cache-Control','no-store');
+  res.sendFile(windowsClientFile);
+});
+
 app.get('/homechat-root-ca.crt', (_req,res)=>{
   if(!fs.existsSync(config.caCertFile)) return res.status(404).type('text/plain').send('HomeChat CA certificate has not been generated yet.');
   res.type('application/x-x509-ca-cert');
