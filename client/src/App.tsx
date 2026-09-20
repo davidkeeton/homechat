@@ -19,7 +19,11 @@ import {
   type User,
 } from './lib/homeClient';
 
-const BASE_URL = window.location.origin;
+const IS_DESKTOP = import.meta.env.VITE_HOMECHAT_DESKTOP === '1';
+const WEB_BASE_URL = window.location.origin;
+function normalizeServerUrl(value:string){let v=value.trim().replace(/\/+$/,'');if(v&&!/^https?:\/\//i.test(v))v=`https://${v}`;return v;}
+const DEFAULT_DESKTOP_SERVER = import.meta.env.VITE_HOMECHAT_DEFAULT_SERVER || '';
+function serverAssetUrl(value:string|null|undefined){if(!value)return value||undefined;if(!IS_DESKTOP||!value.startsWith('/'))return value;const base=normalizeServerUrl(localStorage.getItem('homechat.desktop.serverUrl')||DEFAULT_DESKTOP_SERVER);return base?`${base}${value}`:value;}
 const URL_RE = /https?:\/\/[^\s<>'"`]+/gi;
 const DEVICE_ID=(()=>{const key='homechat.deviceId';let id=localStorage.getItem(key);if(!id){id=crypto.randomUUID();localStorage.setItem(key,id);}return id;})();
 type BeforeInstallPromptEvent = Event & { prompt:()=>Promise<void>; userChoice:Promise<{outcome:'accepted'|'dismissed';platform:string}> };
@@ -27,7 +31,7 @@ function isIos(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator
 function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||Boolean((navigator as any).standalone);}
 function base64UrlToBytes(value:string){const pad='='.repeat((4-value.length%4)%4);const b64=(value+pad).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(b64);return Uint8Array.from(raw,c=>c.charCodeAt(0));}
 
-type Session = { token:string; user:User };
+type Session = { token:string; user:User; baseUrl:string };
 type Lightbox = { url:string; name:string } | null;
 type InventoryTab = 'media'|'files'|'links';
 type UiMessage = Message & { sendState?:'sending'|'failed'; temp?:boolean; fresh?:boolean; localFileUrl?:string; retry?:{body?:string;fileId?:number;clientNonce:string;file?:File;replyToId?:number} };
@@ -47,31 +51,33 @@ function previewText(m:Message|null){ if(!m)return 'No messages yet'; if(m.delet
 function bodyMentionsUser(body:string|null|undefined,user:User){if(!body)return false;const escaped=user.displayName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const pattern=/\s/.test(user.displayName)?new RegExp(`(?:^|\\s)@\"${escaped}\"(?=$|\\s|[.,!?;:])`,'i'):new RegExp(`(?:^|\\s)@${escaped}(?=$|\\s|[.,!?;:])`,'i');return pattern.test(body);}
 
 function Avatar({name,online=false,avatarUrl,size='normal',onClick}:{name:string;online?:boolean;avatarUrl?:string|null;size?:'normal'|'large';onClick?:()=>void}){
-  const content=avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{initials(name)}</span>;
+  const content=avatarUrl ? <img src={serverAssetUrl(avatarUrl)} alt="" /> : <span>{initials(name)}</span>;
   const avatar=<div className={`avatar tone-${avatarTone(name)} ${size==='large'?'large':''}`}>{content}</div>;
   return <div className={`avatar-wrap ${onClick?'clickable':''}`} onClick={onClick} title={onClick?'Change profile picture':undefined}>{avatar}<span className={online?'presence on':'presence'} /></div>;
 }
 
 function Login({onLogin}:{onLogin:(s:Session)=>void}){
   const [displayName,setDisplayName]=useState(''); const [password,setPassword]=useState(''); const [inviteCode,setInviteCode]=useState('');
+  const [serverUrl,setServerUrl]=useState(()=>IS_DESKTOP?(localStorage.getItem('homechat.desktop.serverUrl')||DEFAULT_DESKTOP_SERVER):WEB_BASE_URL);
   const [error,setError]=useState(''); const [busy,setBusy]=useState(false); const [registering,setRegistering]=useState(false); const [publicConfig,setPublicConfig]=useState<{registrationEnabled:boolean;inviteRequired:boolean}|null>(null);
   const [online,setOnline]=useState(()=>navigator.onLine);
-  useEffect(()=>{HomeClient.publicConfig(BASE_URL).then(setPublicConfig).catch(()=>setPublicConfig({registrationEnabled:false,inviteRequired:false}));},[]);
+  const baseUrl=IS_DESKTOP?normalizeServerUrl(serverUrl):WEB_BASE_URL;
+  useEffect(()=>{if(IS_DESKTOP&&!baseUrl){setPublicConfig(null);return;}let alive=true;const id=window.setTimeout(()=>{HomeClient.publicConfig(baseUrl).then(x=>alive&&setPublicConfig(x)).catch(()=>alive&&setPublicConfig({registrationEnabled:false,inviteRequired:false}));},250);return()=>{alive=false;window.clearTimeout(id);};},[baseUrl]);
   useEffect(()=>{const on=()=>setOnline(true);const off=()=>setOnline(false);window.addEventListener('online',on);window.addEventListener('offline',off);return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};},[]);
-  async function submit(e:React.FormEvent){e.preventDefault();if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');return;}setBusy(true);setError('');try{const next=registering?await HomeClient.register(BASE_URL,displayName,password,inviteCode):await HomeClient.login(BASE_URL,displayName,password);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');}else setError(e.code==='display_name_exists'?'That display name is already in use.':e.message||'Sign in failed');}finally{setBusy(false);}}
+  async function submit(e:React.FormEvent){e.preventDefault();if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');return;}if(IS_DESKTOP&&!baseUrl){setError('Enter your HomeChat server address.');return;}setBusy(true);setError('');try{const auth=registering?await HomeClient.register(baseUrl,displayName,password,inviteCode):await HomeClient.login(baseUrl,displayName,password);const next:Session={...auth,baseUrl};if(IS_DESKTOP)localStorage.setItem('homechat.desktop.serverUrl',baseUrl);localStorage.setItem('homechat.session',JSON.stringify(next));onLogin(next);}catch(e:any){if(!navigator.onLine){setOnline(false);setError('HomeChat is offline. Reconnect before signing in.');}else if(IS_DESKTOP&&e instanceof TypeError)setError('Could not reach HomeChat. Check the server address and make sure its certificate is trusted by Windows.');else setError(e.code==='display_name_exists'?'That display name is already in use.':e.message||'Sign in failed');}finally{setBusy(false);}}
   return <div className="login-shell"><form className="login-card" onSubmit={submit}>
-    <div className="brand-mark">H</div><h1>HomeChat</h1><p>{registering?'Create your HomeChat account.':'Private chat for your home.'}</p>
-    {window.location.protocol==='http:'&&<div className="cert-banner"><div><strong>Secure HomeChat setup</strong><span>Install the HomeChat certificate before connecting over HTTPS.</span></div><a href="/homechat-root-ca.crt">Install certificate</a></div>}
-    <label>Display name<input autoFocus value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete={registering?'name':'username'} /></label>
+    <div className="brand-mark">H</div><h1>HomeChat</h1><p>{registering?'Create your HomeChat account.':IS_DESKTOP?'Windows client':'Private chat for your home.'}</p>
+    {IS_DESKTOP&&<><label>Server address<input value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="https://192.168.1.50:8093" autoComplete="url" /></label><small className="desktop-server-note">Use the secure HomeChat URL. Its HomeChat CA certificate must be trusted by Windows.</small></>}
+    {!IS_DESKTOP&&window.location.protocol==='http:'&&<div className="cert-banner"><div><strong>Secure HomeChat setup</strong><span>Install the HomeChat certificate before connecting over HTTPS.</span></div><a href="/homechat-root-ca.crt">Install certificate</a></div>}
+    <label>Display name<input autoFocus={!IS_DESKTOP} value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete={registering?'name':'username'} /></label>
     <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={registering?'new-password':'current-password'} /></label>
     {registering&&publicConfig?.inviteRequired&&<label>Invite code<input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} autoComplete="off" /></label>}
     {!online&&<div className="error">HomeChat is offline. Reconnect before signing in.</div>}
     {error&&online&&<div className="error">{error}</div>}
-    <button className="primary full" disabled={!online||busy||!displayName.trim()||!password}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
+    <button className="primary full" disabled={!online||busy||!displayName.trim()||!password||(IS_DESKTOP&&!baseUrl)}>{busy?(registering?'Creating…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
     {publicConfig?.registrationEnabled&&<button type="button" className="login-switch" onClick={()=>{setRegistering(x=>!x);setError('')}}>{registering?'Already have an account? Sign in':'Create an account'}</button>}
   </form></div>;
 }
-
 function useFileUrl(client:HomeClient,file?:FileView|null){
   const key=file?`${client.baseUrl}:${client.token}:${file.id}`:'';
   const [url,setUrl]=useState(()=>key?fileUrlCache.get(key)||'':'');
@@ -234,7 +240,7 @@ function AdminPanel({client,me,onClose,onUsersChanged}:{client:HomeClient;me:Use
 }
 
 export default function App(){
-  const [session,setSession]=useState<Session|null>(()=>{try{return JSON.parse(localStorage.getItem('homechat.session')||'null')}catch{return null}});
+  const [session,setSession]=useState<Session|null>(()=>{try{const raw=JSON.parse(localStorage.getItem('homechat.session')||'null');if(!raw)return null;if(!raw.baseUrl){if(IS_DESKTOP)return null;raw.baseUrl=WEB_BASE_URL;}return raw;}catch{return null}});
   function saveSession(next:Session){localStorage.setItem('homechat.session',JSON.stringify(next));setSession(next);}
   if(!session) return <Login onLogin={saveSession}/>;
   return <Messenger session={session} onSessionChange={saveSession} onLogout={()=>{localStorage.removeItem('homechat.session');setSession(null)}}/>;
@@ -244,7 +250,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   type ConnectionState='connected'|'reconnecting'|'offline';
   type Toast={id:number;text:string;kind:'error'|'info'};
   const PAGE_SIZE=50;
-  const client=useMemo(()=>new HomeClient(BASE_URL,session.token,DEVICE_ID),[session.token]);
+  const client=useMemo(()=>new HomeClient(session.baseUrl,session.token,DEVICE_ID),[session.baseUrl,session.token]);
   const [me,setMe]=useState(session.user);
   const [users,setUsers]=useState<User[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
@@ -268,7 +274,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   const [uploading,setUploading]=useState(false);
   const [pendingFile,setPendingFile]=useState<File|null>(null);
   const [pendingUrl,setPendingUrl]=useState<string>('');
-  const [notificationPermission,setNotificationPermission]=useState<NotificationPermission>(()=>typeof Notification==='undefined'?'denied':Notification.permission);
+  const [notificationPermission,setNotificationPermission]=useState<NotificationPermission>(()=>IS_DESKTOP?'default':typeof Notification==='undefined'?'denied':Notification.permission);
   const [pushSubscribed,setPushSubscribed]=useState(false);
   const [serviceConfig,setServiceConfig]=useState<PublicServiceConfig|null>(null);
   const [drawer,setDrawer]=useState<{view:'details'|'media'|'files'|'links';target:'me'|'conversation'}|null>(null);
@@ -337,9 +343,9 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   useEffect(()=>{const el=composerRef.current;if(!el)return;el.style.height='0px';el.style.height=`${Math.min(el.scrollHeight,140)}px`;},[text]);
 
   async function refresh(){
-    const [freshMe,u,c,svc,requests]=await Promise.all([client.me(),client.users(),client.conversations(),HomeClient.publicConfig(BASE_URL),client.contactRequests()]);
+    const [freshMe,u,c,svc,requests]=await Promise.all([client.me(),client.users(),client.conversations(),HomeClient.publicConfig(client.baseUrl),client.contactRequests()]);
     setMe(freshMe);setUsers(u);setConversations(c);setServiceConfig(svc);setContactRequests(requests);
-    if(freshMe.hid!==session.user.hid||freshMe.avatarUrl!==session.user.avatarUrl||freshMe.displayName!==session.user.displayName){onSessionChange({token:session.token,user:freshMe});}
+    if(freshMe.hid!==session.user.hid||freshMe.avatarUrl!==session.user.avatarUrl||freshMe.displayName!==session.user.displayName){onSessionChange({token:session.token,user:freshMe,baseUrl:session.baseUrl});}
     if(!activeIdRef.current&&c.length)setActiveId(c[0].id);
   }
   async function loadMessages(cid:number){
@@ -393,12 +399,13 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   }
 
   function beep(){try{const Ctx=window.AudioContext||(window as any).webkitAudioContext;if(!Ctx)return;const ctx=audioRef.current??new Ctx();audioRef.current=ctx;if(ctx.state==='suspended')void ctx.resume();const osc=ctx.createOscillator();const gain=ctx.createGain();osc.frequency.value=680;gain.gain.setValueAtTime(.045,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.16);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.17);}catch{}}
-  async function currentPushSubscription(){if(!('serviceWorker'in navigator)||!('PushManager'in window))return null;const reg=await navigator.serviceWorker.ready;return reg.pushManager.getSubscription();}
+  async function currentPushSubscription(){if(IS_DESKTOP)return null;if(!('serviceWorker'in navigator)||!('PushManager'in window))return null;const reg=await navigator.serviceWorker.ready;return reg.pushManager.getSubscription();}
   async function registerPushSubscription(subscription:PushSubscription){const json=subscription.toJSON();if(!json.endpoint||!json.keys?.p256dh||!json.keys?.auth)throw new Error('Browser returned an incomplete push subscription.');await client.savePushSubscription({endpoint:json.endpoint,keys:{p256dh:json.keys.p256dh,auth:json.keys.auth},deviceId:DEVICE_ID});setPushSubscribed(true);}
   async function syncExistingPushSubscription(){try{const sub=await currentPushSubscription();if(!sub){setPushSubscribed(false);return;}await registerPushSubscription(sub);}catch{setPushSubscribed(false);}}
   async function enableNotifications(){
     try{
       beep();
+      if(IS_DESKTOP){const {isPermissionGranted,requestPermission}=await import('@tauri-apps/plugin-notification');let granted=await isPermissionGranted();if(!granted)granted=(await requestPermission())==='granted';setNotificationPermission(granted?'granted':'denied');if(granted)toast('Windows notifications enabled.','info');else toast('Notifications were not enabled.','info');return;}
       if(!window.isSecureContext||typeof Notification==='undefined'||!('serviceWorker'in navigator)||!('PushManager'in window)){toast('Background notifications are not supported by this browser.');return;}
       if(isIos()&&!isStandalone()){toast('On iPhone/iPad, add HomeChat to the Home Screen first, then enable notifications from the installed app.','info');return;}
       const permission=Notification.permission==='granted'?'granted':await Notification.requestPermission();setNotificationPermission(permission);
@@ -414,11 +421,11 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
       toast('Background notifications enabled.','info');
     }catch(e){setPushSubscribed(false);toast(errorText(e,'Could not enable background notifications.'));}
   }
-  async function notifyIncoming(m:Message){const c=conversationsRef.current.find(x=>x.id===m.conversationId);const isVisible=!document.hidden&&activeIdRef.current===m.conversationId;if(isVisible)return;beep();if(typeof Notification!=='undefined'&&Notification.permission==='granted'){const title=c?conversationName(c):m.sender.displayName;const body=previewText(m);try{const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,tag:`homechat-${m.conversationId}`,icon:'/icons/homechat-192.png',data:{conversationId:m.conversationId,url:`/?conversation=${m.conversationId}`}});}catch{}}}
+  async function notifyIncoming(m:Message){const c=conversationsRef.current.find(x=>x.id===m.conversationId);const isVisible=!document.hidden&&activeIdRef.current===m.conversationId;if(isVisible)return;beep();const title=c?conversationName(c):m.sender.displayName;const body=previewText(m);if(IS_DESKTOP){try{const {isPermissionGranted,sendNotification}=await import('@tauri-apps/plugin-notification');if(await isPermissionGranted())sendNotification({title,body});}catch{}return;}if(typeof Notification!=='undefined'&&Notification.permission==='granted'){try{const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,tag:`homechat-${m.conversationId}`,icon:'/icons/homechat-192.png',data:{conversationId:m.conversationId,url:`/?conversation=${m.conversationId}`}});}catch{}}}
 
   useEffect(()=>{
     refresh().catch(e=>{if(e instanceof ApiError&&e.status===401){onLogout();return;}toast(errorText(e,'Could not refresh HomeChat.'));}).finally(()=>setInitialLoading(false));
-    if(typeof Notification!=='undefined'&&Notification.permission==='granted')void syncExistingPushSubscription();
+    if(!IS_DESKTOP&&typeof Notification!=='undefined'&&Notification.permission==='granted')void syncExistingPushSubscription();
     const socket=client.connect();
     const manager=socket.io;
     const connected=()=>setConnection('connected');
@@ -446,9 +453,9 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
   },[client]);
   useEffect(()=>{
     function onServiceWorkerMessage(event:MessageEvent){const data=event.data;if(!data)return;if(data.type==='homechat:push-received'){void refresh().catch(()=>{});return;}if(data.type!=='homechat:open-conversation')return;const cid=Number(data.conversationId);if(!cid)return;activeIdRef.current=cid;setActiveId(cid);void refresh().catch(()=>{});window.history.replaceState({},'',window.location.pathname);}
-    navigator.serviceWorker?.addEventListener('message',onServiceWorkerMessage);
+    if(!IS_DESKTOP)navigator.serviceWorker?.addEventListener('message',onServiceWorkerMessage);
     const requested=Number(new URLSearchParams(window.location.search).get('conversation')||0);if(requested){activeIdRef.current=requested;setActiveId(requested);void refresh().finally(()=>window.history.replaceState({},'',window.location.pathname));}
-    return()=>navigator.serviceWorker?.removeEventListener('message',onServiceWorkerMessage);
+    return()=>{if(!IS_DESKTOP)navigator.serviceWorker?.removeEventListener('message',onServiceWorkerMessage);};
   },[client]);
   useEffect(()=>{if(activeId){void loadMessages(activeId);setPendingFile(null);}},[activeId]);
   useEffect(()=>{
@@ -474,7 +481,7 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     if(isIos()&&!isStandalone()){toast('On iPhone/iPad: tap Share, then Add to Home Screen.','info');}
   }
   function dismissInstall(){localStorage.setItem('homechat.installDismissed','1');setInstallDismissed(true);}
-  const showInstallCard=!installDismissed&&!isStandalone()&&(Boolean(installPrompt)||isIos());
+  const showInstallCard=!IS_DESKTOP&&!installDismissed&&!isStandalone()&&(Boolean(installPrompt)||isIos());
   const filtered=conversations.filter(c=>conversationName(c).toLowerCase().includes(search.toLowerCase()));
   const mentionMatch=active?.type==='group'?/(?:^|\s)@([A-Za-z0-9_.-]*)$/.exec(text):null;
   const mentionSuggestions=mentionMatch?active!.members.filter(u=>u.id!==me.id&&u.displayName.toLowerCase().startsWith(mentionMatch[1].toLowerCase())).slice(0,6):[];
@@ -524,8 +531,8 @@ function Messenger({session,onSessionChange,onLogout}:{session:Session;onSession
     if(!serverLoggedOut&&sub){try{await sub.unsubscribe();}catch{}}
     onLogout();
   }
-  async function changeDisplayName(name:string){try{const user=await client.setDisplayName(name);setMe(user);onSessionChange({token:session.token,user});await refresh();toast('Display name updated.','info');}catch(e:any){toast(e?.code==='display_name_exists'?'That display name is already in use.':errorText(e,'Could not update display name.'));}}
-  async function changeAvatar(file:File){if(!file.type.startsWith('image/')){toast('Choose an image for your avatar.');return;}try{const user=await client.uploadAvatar(file);setMe(user);onSessionChange({token:session.token,user});await refresh();}catch(e){toast(errorText(e,'Could not update avatar.'));}finally{if(avatarRef.current)avatarRef.current.value='';}}
+  async function changeDisplayName(name:string){try{const user=await client.setDisplayName(name);setMe(user);onSessionChange({token:session.token,user,baseUrl:session.baseUrl});await refresh();toast('Display name updated.','info');}catch(e:any){toast(e?.code==='display_name_exists'?'That display name is already in use.':errorText(e,'Could not update display name.'));}}
+  async function changeAvatar(file:File){if(!file.type.startsWith('image/')){toast('Choose an image for your avatar.');return;}try{const user=await client.uploadAvatar(file);setMe(user);onSessionChange({token:session.token,user,baseUrl:session.baseUrl});await refresh();}catch(e){toast(errorText(e,'Could not update avatar.'));}finally{if(avatarRef.current)avatarRef.current.value='';}}
   async function copyText(value:string,label:string){try{await navigator.clipboard.writeText(value);toast(`${label} copied.`,'info');}catch{toast(`Could not copy ${label.toLowerCase()}.`);}}
   async function changeActiveGroupAvatar(file:File){if(!activeId)return;try{await client.uploadGroupAvatar(activeId,file);await refresh();toast('Group picture updated.','info');}catch(e){toast(errorText(e,'Could not update group picture.'));}}
   async function renameActiveGroup(name:string){if(!active)return;try{await client.renameGroup(active.id,name);await refresh();toast('Group renamed.','info');}catch(e){toast(errorText(e,'Could not rename group.'));}}
