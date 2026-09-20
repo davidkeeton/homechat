@@ -305,12 +305,14 @@ if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
   app.get('/', (_req,res)=>res.sendFile(path.join(publicDir,'index.html')));
 }
-const tlsEnabled=Boolean(config.tlsCertFile&&config.tlsKeyFile);
-if(Boolean(config.tlsCertFile)!==Boolean(config.tlsKeyFile)) throw new Error('TLS_CERT_FILE and TLS_KEY_FILE must be configured together');
-const server=tlsEnabled
-  ? https.createServer({cert:fs.readFileSync(config.tlsCertFile!),key:fs.readFileSync(config.tlsKeyFile!)},app)
-  : http.createServer(app);
-const io=new SocketServer(server,{cors:{origin:true,credentials:true}});
+// The real HomeChat app is HTTPS-only.  Port 8092 is intentionally kept as a
+// tiny HTTP bootstrap service so a new phone can download the private CA before
+// it has enough trust to open the secure app on 8093.
+const tlsReady=fs.existsSync(config.tlsCertFile)&&fs.existsSync(config.tlsKeyFile);
+const server=tlsReady
+  ? https.createServer({cert:fs.readFileSync(config.tlsCertFile),key:fs.readFileSync(config.tlsKeyFile)},app)
+  : null;
+const io=new SocketServer(server ?? http.createServer(),{cors:{origin:true,credentials:true}});
 const online=new Map<number,number>();
 function roomForUser(id:number){return `user:${id}`;}
 function broadcastPresence(userId:number,isOnline:boolean){for(const viewer of listUsers())if(canSeePresence(viewer.id,userId))io.to(roomForUser(viewer.id)).emit('presence:update',{userId,online:isOnline});}
@@ -384,4 +386,31 @@ function cleanupStorage(): void {
 cleanupStorage();
 const cleanupTimer=setInterval(cleanupStorage,6*60*60*1000);(cleanupTimer as any).unref?.();
 
-server.listen(config.port,config.host,()=>console.log(`HomeChat ${APP_VERSION} listening on ${tlsEnabled?'https':'http'}://${config.host}:${config.port}`));
+function htmlEscape(value:string): string {
+  return value.replace(/[&<>"']/g,ch=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch] ?? ch));
+}
+
+const bootstrap=express();
+bootstrap.disable('x-powered-by');
+bootstrap.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');next();});
+bootstrap.get('/health',(_req,res)=>res.json({ok:true,version:APP_VERSION,service:'bootstrap',httpsReady:tlsReady}));
+bootstrap.get('/homechat-root-ca.crt',(_req,res)=>{
+  if(!fs.existsSync(config.caCertFile))return res.status(404).type('text/plain').send('HomeChat CA certificate has not been generated yet.');
+  res.type('application/x-x509-ca-cert');
+  res.setHeader('Content-Disposition','attachment; filename="homechat-root-ca.crt"');
+  res.sendFile(config.caCertFile);
+});
+bootstrap.get('/',(req,res)=>{
+  const host=htmlEscape(req.hostname || '192.168.98.43');
+  const secureUrl=`https://${host}:${config.publicHttpsPort}/`;
+  const ready=tlsReady&&fs.existsSync(config.caCertFile);
+  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>HomeChat secure setup</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08090e;color:#f4f5fb;font-family:system-ui,-apple-system,sans-serif}.card{width:min(430px,90vw);padding:28px;border:1px solid #303444;border-radius:20px;background:#12141d;box-shadow:0 30px 90px #0008}h1{margin:0 0 8px}p{color:#aeb4c6;line-height:1.5}.button{display:block;text-align:center;text-decoration:none;margin-top:14px;padding:13px 16px;border-radius:12px;background:#6d5dfc;color:white;font-weight:700}.secondary{background:#242837}.disabled{opacity:.45;pointer-events:none}.note{font-size:13px}</style></head><body><main class="card"><h1>HomeChat secure setup</h1><p>Install the HomeChat root certificate on this device, trust it as a root CA, then continue to the secure app.</p><a class="button${fs.existsSync(config.caCertFile)?'':' disabled'}" href="/homechat-root-ca.crt">Install certificate</a><a class="button secondary${tlsReady?'':' disabled'}" href="${secureUrl}">Continue to secure HomeChat</a>${ready?'':'<p class="note">TLS files are not ready yet. Generate them in the HomeChat appdata <code>tls</code> folder.</p>'}<p class="note">Secure HomeChat: ${secureUrl}</p></main></body></html>`);
+});
+
+const bootstrapServer=http.createServer(bootstrap);
+bootstrapServer.listen(config.httpPort,config.host,()=>console.log(`HomeChat ${APP_VERSION} bootstrap listening on http://${config.host}:${config.httpPort}`));
+if(server){
+  server.listen(config.httpsPort,config.host,()=>console.log(`HomeChat ${APP_VERSION} secure app listening on https://${config.host}:${config.httpsPort}`));
+}else{
+  console.warn(`HomeChat ${APP_VERSION}: HTTPS not started; missing ${config.tlsCertFile} or ${config.tlsKeyFile}`);
+}

@@ -1,6 +1,6 @@
 # HomeChat
 
-## v0.11.5 identity simplification
+## v0.11.6 HTTP bootstrap + HTTPS app
 
 HomeChat now uses a single human-readable account name plus a permanent generated HID. The separate username field has been removed.
 
@@ -23,39 +23,47 @@ The PWA/mobile work from v0.11.x remains unchanged:
 
 ### Test server
 
-The current test host remains `192.168.98.43`. Because the web client and API are served by the same HomeChat process, there is no separate server-address setting in v0.11.
-
-Ordinary browser use continues to work at:
+The current test host is `192.168.98.43`. v0.11.6 deliberately separates bootstrap/onboarding from the secure application:
 
     http://192.168.98.43:8092
 
-Full PWA behavior (service worker/installability, microphone access, etc.) requires a trusted secure origin. For LAN testing, v0.11 includes an optional local TLS mode.
+Port **8092** is HTTP bootstrap only. It serves a small setup page, the public HomeChat root CA certificate, and a health check. It does **not** serve the login form, API, or Socket.IO.
 
-### LAN HTTPS for PWA testing
+    https://192.168.98.43:8093
 
-On the Docker host:
+Port **8093** is the actual HomeChat application: login, registration, REST API, Socket.IO, attachments, microphone access, service worker and installable PWA.
+
+### LAN HTTPS / certificate onboarding
+
+On the Docker host, generate the test CA and server certificate once:
 
     cd ~/docker/homechat
     ./tools/create-test-tls.sh 192.168.98.43
 
-This creates a local test CA and a server certificate under `/home/dkeeton/docker/appdata/homechat/tls`. Install `homechat-root-ca.crt` as a trusted root CA on each Windows/Android/iOS test device. Keep `homechat-root-ca.key` private on the server.
+The generated files live outside Git under:
 
-The existing appdata mount already exposes this folder inside the container as `/app/data/tls`, so no second volume mount is required. On the plain-HTTP login page HomeChat now shows an **Install certificate** banner. That link serves only:
+    /home/dkeeton/docker/appdata/homechat/tls/
 
-    /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt
+The tracked `docker-compose.yml` now mounts the normal appdata directory and starts both listeners automatically. No local Compose override is required. The relevant files are read inside the container as:
 
-through the relative URL:
+    /app/data/tls/homechat.crt
+    /app/data/tls/homechat.key
+    /app/data/tls/homechat-root-ca.crt
 
-    /homechat-root-ca.crt
+On a new phone or computer, first open:
 
-The private keys are never exposed by that route. After installing/trusting the CA on the device, uncomment `TLS_CERT_FILE` and `TLS_KEY_FILE` in `docker-compose.yml`, rebuild, and use:
+    http://192.168.98.43:8092
 
-    https://192.168.98.43:8092
+Tap **Install certificate**, install/trust `homechat-root-ca.crt` as a root CA, then tap **Continue to secure HomeChat**. That button opens:
 
-Windows/Android can then install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
+    https://192.168.98.43:8093
+
+Only the public root certificate is exposed by the HTTP bootstrap service. `homechat.key` and `homechat-root-ca.key` are never served.
+
+Once HTTPS is trusted, Windows/Android can install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.5** (HTTP login certificate-install banner for LAN HTTPS setup).
+Current version: **0.11.6** (HTTP bootstrap on 8092, secure HomeChat on 8093).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
 
@@ -69,7 +77,7 @@ Recommended workflow:
 # Development machine / repository clone
 git status
 git add .
-git commit -m "HomeChat v0.11.5 display-name identity"
+git commit -m "HomeChat v0.11.6 split HTTP bootstrap and HTTPS app"
 git push origin main
 ```
 
@@ -99,8 +107,8 @@ Keep the application version synchronized in the server health response, package
 After a version has been built and smoke-tested:
 
 ```bash
-git tag -a v0.11.5 -m "HomeChat v0.11.5"
-git push origin v0.11.5
+git tag -a v0.11.6 -m "HomeChat v0.11.6"
+git push origin v0.11.6
 ```
 
 Tags are useful checkpoints even while development continues directly on `main`.
@@ -217,16 +225,28 @@ mkdir -p /home/dkeeton/docker/appdata/homechat
 docker compose up -d --build
 ```
 
-Server and web client:
+Bootstrap / certificate setup:
 
 ```text
 http://SERVER-IP:8092
 ```
 
-Health check:
+Secure HomeChat app:
+
+```text
+https://SERVER-IP:8093
+```
+
+Bootstrap health check:
 
 ```bash
 curl http://localhost:8092/health
+```
+
+Secure app health check (after the CA is trusted by curl/system):
+
+```bash
+curl --cacert /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt https://192.168.98.43:8093/health
 ```
 
 **v0.11.5 intentionally does not migrate the old username-based user schema.** Before first start of this version, stop HomeChat, back up the appdata folder, then remove the pre-production SQLite database:
@@ -245,7 +265,7 @@ HomeChat will create a fresh database using unique display names and HIDs. TLS f
 The first account becomes administrator:
 
 ```bash
-curl -X POST http://localhost:8092/api/setup \
+curl --cacert /home/dkeeton/docker/appdata/homechat/tls/homechat-root-ca.crt -X POST https://192.168.98.43:8093/api/setup \
   -H 'Content-Type: application/json' \
   -d '{"displayName":"Dave","password":"change-this-password"}'
 ```

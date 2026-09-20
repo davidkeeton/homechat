@@ -9,11 +9,14 @@ services:
       UPLOAD_DIR: /app/data/uploads
       MAX_UPLOAD_BYTES: 104857600
       SESSION_DAYS: 30
-      # For installable PWA testing, generate/test TLS then uncomment:
-      # TLS_CERT_FILE: /app/data/tls/homechat.crt
-      # TLS_KEY_FILE: /app/data/tls/homechat.key
-      # CA_CERT_FILE defaults to /app/data/tls/homechat-root-ca.crt
+      HTTP_PORT: 3000
+      HTTPS_PORT: 3001
+      PUBLIC_HTTPS_PORT: 8093
+      TLS_CERT_FILE: /app/data/tls/homechat.crt
+      TLS_KEY_FILE: /app/data/tls/homechat.key
+      CA_CERT_FILE: /app/data/tls/homechat-root-ca.crt
     volumes:
       - /home/dkeeton/docker/appdata/homechat:/app/data
     ports:
       - "8092:3000"
+      - "8093:3001"
