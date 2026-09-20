@@ -97,38 +97,33 @@ app.post('/api/contact-requests',requireAuth,(req,res)=>{
   const uid=Number(req.body?.userId); if(!uid) return res.status(400).json({error:'invalid_user'});
   try{
     sendContactRequest(req.user!.id,uid);
-    const nowContacts=listContacts(req.user!.id).some(u=>u.id===uid);
-    if(nowContacts){
-      const id=findOrCreateDirect(req.user!.id,uid);
-      syncPresenceVisibility(uid);syncPresenceVisibility(req.user!.id);
-      io.to(roomForUser(uid)).emit('contacts:changed',{kind:'accepted',userId:req.user!.id,conversationId:id});
-      io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'accepted',userId:uid,conversationId:id});
-    }else{
-      io.to(roomForUser(uid)).emit('contacts:changed',{kind:'incoming',userId:req.user!.id});
-      io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'outgoing',userId:uid});
-    }
-    res.status(204).end();
+    // A reverse pending request auto-accepts in the DB. In that case make the
+    // direct chat immediately usable; otherwise wake the recipient's UI so the
+    // request appears in the chat list without opening Contacts.
+    const accepted=listContacts(req.user!.id).some(u=>u.id===uid);
+    const conversationId=accepted?findOrCreateDirect(req.user!.id,uid):null;
+    io.to(roomForUser(uid)).emit('contacts:changed',{kind:accepted?'accepted':'request',conversationId,fromUserId:req.user!.id});
+    io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:accepted?'accepted':'outgoing',conversationId,fromUserId:req.user!.id});
+    res.status(201).json({status:accepted?'accepted':'requested',conversationId});
   }catch(e:any){res.status(400).json({error:e?.message||'request_failed'});}
 });
 app.post('/api/contact-requests/:id/accept',requireAuth,(req,res)=>{
   try{
-    const requestId=Number(req.params.id);
-    const before=contactRequests(req.user!.id).incoming.find(x=>x.id===requestId);
+    const before=contactRequests(req.user!.id).incoming.find(x=>x.id===Number(req.params.id));
     if(!before) return res.status(404).json({error:'request_not_found'});
-    acceptContactRequest(requestId,req.user!.id);
-    const id=findOrCreateDirect(req.user!.id,before.sender.id);
+    acceptContactRequest(Number(req.params.id),req.user!.id);
+    const conversationId=findOrCreateDirect(req.user!.id,before.sender.id);
     syncPresenceVisibility(before.sender.id);syncPresenceVisibility(req.user!.id);
-    io.to(roomForUser(before.sender.id)).emit('contacts:changed',{kind:'accepted',userId:req.user!.id,conversationId:id});
-    io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'accepted',userId:before.sender.id,conversationId:id});
-    res.json({id});
+    io.to(roomForUser(before.sender.id)).emit('contacts:changed',{kind:'accepted',conversationId,fromUserId:req.user!.id});
+    io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'accepted',conversationId,fromUserId:before.sender.id});
+    res.json({conversationId});
   }catch{res.status(404).json({error:'request_not_found'});}
 });
 app.delete('/api/contact-requests/:id',requireAuth,(req,res)=>{
-  const requestId=Number(req.params.id);
-  const all=contactRequests(req.user!.id);
-  const before=all.incoming.find(x=>x.id===requestId)??all.outgoing.find(x=>x.id===requestId);
-  declineContactRequest(requestId,req.user!.id);
-  if(before){const other=before.sender.id===req.user!.id?before.recipient.id:before.sender.id;io.to(roomForUser(other)).emit('contacts:changed',{kind:'declined',userId:req.user!.id});io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'declined',userId:other});}
+  const before=contactRequests(req.user!.id).incoming.find(x=>x.id===Number(req.params.id));
+  declineContactRequest(Number(req.params.id),req.user!.id);
+  if(before)io.to(roomForUser(before.sender.id)).emit('contacts:changed',{kind:'declined',fromUserId:req.user!.id});
+  io.to(roomForUser(req.user!.id)).emit('contacts:changed',{kind:'declined'});
   res.status(204).end();
 });
 app.delete('/api/contacts/:userId',requireAuth,(req,res)=>{const other=Number(req.params.userId);removeContact(req.user!.id,other);syncPresenceVisibility(req.user!.id);syncPresenceVisibility(other);res.status(204).end();});
@@ -146,6 +141,24 @@ app.post('/api/conversations/direct',requireAuth,(req,res)=>{
   if(isBlockedPair(req.user!.id,otherId)) return res.status(403).json({error:'blocked'});
   if(!canMessageUser(req.user!.id,otherId)) return res.status(403).json({error:'dm_not_allowed'});
   const id=findOrCreateDirect(req.user!.id,otherId); res.status(201).json({id});
+});
+app.post('/api/conversations/:id/messages',requireAuth,(req,res)=>{
+  const cid=Number(req.params.id);
+  const body=typeof req.body?.body==='string'?req.body.body:null;
+  const fileId=req.body?.fileId?Number(req.body.fileId):null;
+  const clientNonce=typeof req.body?.clientNonce==='string'?req.body.clientNonce.slice(0,80):null;
+  const replyToId=req.body?.replyToId?Number(req.body.replyToId):null;
+  if(!isMember(cid,req.user!.id)) return res.status(403).json({error:'not_a_member'});
+  if(directConversationBlocked(cid,req.user!.id)) return res.status(403).json({error:'blocked'});
+  if(directConversationPrivacyBlocked(cid,req.user!.id)) return res.status(403).json({error:'dm_not_allowed'});
+  if(!body?.trim() && !fileId) return res.status(400).json({error:'empty_message'});
+  try{
+    const message=createMessage(cid,req.user!.id,body,fileId,clientNonce,replyToId);
+    for(const uid of conversationMemberIds(cid)) io.to(roomForUser(uid)).emit('message:new',message);
+    res.status(201).json(message);
+  }catch(e:any){
+    res.status(400).json({error:e?.message||'send_failed'});
+  }
 });
 app.post('/api/conversations/group',requireAuth,(req,res)=>{
   const name=String(req.body?.name??'').trim(); const members=Array.isArray(req.body?.memberIds)?req.body.memberIds.map(Number):[];

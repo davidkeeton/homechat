@@ -664,9 +664,13 @@ export function canMessageUser(senderId:number,recipientId:number): boolean {
   if(senderId===recipientId) return true;
   if(!getUserById(recipientId)) return false;
   if(isBlockedPair(senderId,recipientId)) return false;
+  // An accepted contact/chat request is explicit permission for the two users to DM.
+  // This also prevents the initiator's restrictive default DM policy from making
+  // an accepted request unusable in the reverse direction.
+  if(areContacts(recipientId,senderId) || areContacts(senderId,recipientId)) return true;
   const p=getPrivacy(recipientId);
   if(p.dmPolicy==='nobody') return false;
-  if(p.dmPolicy==='contacts') return areContacts(recipientId,senderId);
+  if(p.dmPolicy==='contacts') return false;
   return true;
 }
 

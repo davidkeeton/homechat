@@ -60,7 +60,7 @@ export class HomeClient {
   directory(q=''){ return this.api<DirectoryUser[]>(`/api/directory?q=${encodeURIComponent(q)}`); }
   searchMessages(q:string,limit=50){ return this.api<MessageSearchResult[]>(`/api/search/messages?q=${encodeURIComponent(q)}&limit=${limit}`); }
   requestContact(userId:number){ return this.api<void>('/api/contact-requests',{method:'POST',body:JSON.stringify({userId})}); }
-  acceptContactRequest(id:number){ return this.api<{id:number}>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
+  acceptContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
   declineContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}`,{method:'DELETE'}); }
   removeContact(userId:number){ return this.api<void>(`/api/contacts/${userId}`,{method:'DELETE'}); }
   blocked(){ return this.api<User[]>('/api/blocks'); }

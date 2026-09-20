@@ -70,8 +70,8 @@ export class HomeClient {
   contactRequests(){ return this.api<ContactRequests>('/api/contact-requests'); }
   directory(q=''){ return this.api<DirectoryUser[]>(`/api/directory?q=${encodeURIComponent(q)}`); }
   searchMessages(q:string,limit=50){ return this.api<MessageSearchResult[]>(`/api/search/messages?q=${encodeURIComponent(q)}&limit=${limit}`); }
-  requestContact(userId:number){ return this.api<void>('/api/contact-requests',{method:'POST',body:JSON.stringify({userId})}); }
-  acceptContactRequest(id:number){ return this.api<{id:number}>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
+  requestContact(userId:number){ return this.api<{status:'requested'|'accepted';conversationId:number|null}>('/api/contact-requests',{method:'POST',body:JSON.stringify({userId})}); }
+  acceptContactRequest(id:number){ return this.api<{conversationId:number}>(`/api/contact-requests/${id}/accept`,{method:'POST'}); }
   declineContactRequest(id:number){ return this.api<void>(`/api/contact-requests/${id}`,{method:'DELETE'}); }
   removeContact(userId:number){ return this.api<void>(`/api/contacts/${userId}`,{method:'DELETE'}); }
   blocked(){ return this.api<User[]>('/api/blocks'); }
@@ -89,7 +89,7 @@ export class HomeClient {
   removeGroupMember(conversationId:number,userId:number){ return this.api<void>(`/api/conversations/${conversationId}/members/${userId}`,{method:'DELETE'}); }
   createUser(username:string,displayName:string,password:string,isAdmin=false){ return this.api<User>('/api/users',{method:'POST',body:JSON.stringify({username,displayName,password,isAdmin})}); }
   private emitAck<T>(event:string,payload:unknown,timeoutMs=12000):Promise<T>{return new Promise<T>((resolve,reject)=>{if(!this.socket?.connected)return reject(new Error('offline'));this.socket.timeout(timeoutMs).emit(event,payload,(err:Error|null,r:any)=>{if(err)return reject(new Error('timeout'));return r?.ok?resolve(r as T):reject(new Error(r?.error??`${event}_failed`));});});}
-  async send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){const r=await this.emitAck<{ok:true;message:Message}>('message:send',{conversationId,body,fileId,clientNonce,replyToId});return r.message;}
+  send(conversationId:number,body?:string,fileId?:number,clientNonce?:string,replyToId?:number){return this.api<Message>(`/api/conversations/${conversationId}/messages`,{method:'POST',body:JSON.stringify({body,fileId,clientNonce,replyToId})});}
   async editMessage(messageId:number,body:string){const r=await this.emitAck<{ok:true;message:Message}>('message:edit',{messageId,body});return r.message;}
   async deleteMessage(messageId:number){const r=await this.emitAck<{ok:true;message:Message}>('message:delete',{messageId});return r.message;}
   async reaction(messageId:number,emoji:string){const r=await this.emitAck<{ok:true;reactions:MessageReaction[]}>('reaction:toggle',{messageId,emoji});return r.reactions;}

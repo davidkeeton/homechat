@@ -1,14 +1,6 @@
 # HomeChat
 
-## v0.11.2 chat request / composer fix
-
-- Incoming contact requests now appear at the top of the normal chat list as **Chat request** entries instead of being hidden inside Contacts.
-- Opening a request shows an in-chat Accept / Decline screen.
-- Accepting a request now creates (or reuses) the direct conversation immediately and opens it, so messaging is available as soon as the contact relationship is accepted.
-- Contact/request changes are pushed over Socket.IO so the other client refreshes without needing to reopen Contacts.
-- Fixed long-history conversations pushing the message composer outside the visible chat panel on mobile/desktop by constraining the flex/grid scroll area.
-
-## v0.11.1 PWA / cross-platform test pass
+## v0.11.3 PWA / cross-platform test pass
 
 HomeChat's existing React client is now installable as a Progressive Web App on supported browsers. The same UI continues to work as an ordinary web client.
 
@@ -46,9 +38,105 @@ Then uncomment the `TLS_CERT_FILE`, `TLS_KEY_FILE`, and `/app/tls` lines in `doc
 Windows/Android can then install HomeChat through the browser's Install/Add to Home Screen action. On iOS, open the HTTPS site in Safari and use Share -> Add to Home Screen.
 
 
-Current version: **0.11.0** (PWA / cross-platform test pass).
+Current version: **0.11.3** (mobile/offline message-send reliability fix).
 
 A small self-hosted household messenger with direct/group chat, presence, reactions, attachments, voice snippets, Saved Messages, HIDs, contacts, and a searchable user directory.
+
+## Version control
+
+GitHub `main` is the current source of truth during active development. HomeChat does not currently maintain a separate long-lived development branch because there is no production user base yet. Each tested milestone should be committed with an explicit version and, when useful, tagged so it is easy to compare or roll back.
+
+Recommended workflow:
+
+```bash
+# Development machine / repository clone
+git status
+git add .
+git commit -m "HomeChat v0.11.3 chat request fixes"
+git push origin main
+```
+
+On the Docker host, deploy exactly what is in GitHub:
+
+```bash
+cd ~/docker/homechat
+git pull --ff-only
+docker compose down
+docker compose up -d --build
+```
+
+Before deploying, `git status` should normally report a clean working tree. Runtime data under `/home/dkeeton/docker/appdata/homechat` is deliberately outside the repository and must never be committed.
+
+### Version numbering
+
+HomeChat currently uses simple semantic-style milestone numbering:
+
+- `0.x.0` — feature/milestone release, for example `0.11.0`
+- `0.x.y` — bug-fix or stabilization update, for example `0.11.1`
+- `1.0.0` — reserved for a later stable release once the protocol/data model and upgrade path are considered mature
+
+Keep the application version synchronized in the server health response, package metadata, README, and release/tag name.
+
+### Tagging a tested release
+
+After a version has been built and smoke-tested:
+
+```bash
+git tag -a v0.11.3 -m "HomeChat v0.11.3"
+git push origin v0.11.3
+```
+
+Tags are useful checkpoints even while development continues directly on `main`.
+
+### Rollback
+
+To inspect previous releases:
+
+```bash
+git tag --list
+git log --oneline --decorate -20
+```
+
+To temporarily deploy a previous tagged version on the Docker host:
+
+```bash
+cd ~/docker/homechat
+git fetch --tags
+git checkout v0.11.1
+docker compose down
+docker compose up -d --build
+```
+
+To return to current development:
+
+```bash
+git checkout main
+git pull --ff-only
+docker compose down
+docker compose up -d --build
+```
+
+Database migrations are forward-moving, so source rollback does **not** automatically roll the SQLite schema backward. Back up `/home/dkeeton/docker/appdata/homechat` before releases that include database migrations.
+
+### Files that must stay out of Git
+
+At minimum, keep these runtime/build artifacts ignored:
+
+```text
+node_modules/
+dist/
+client/dist/
+.env
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+data/
+appdata/
+```
+
+TLS private keys and local CA private keys must also stay outside the repository.
+
 
 ## v0.9 social + message interaction pass
 
@@ -60,7 +148,7 @@ A small self-hosted household messenger with direct/group chat, presence, reacti
 - @username mention highlighting
 - Existing realtime, optimistic-send, reactions, receipts, pagination, media/files/links inventory, and details UI remain intact
 
-# HomeChat
+## Overview
 
 A small self-hosted household messenger with a built-in web client. HomeChat is intentionally direct-message/group-chat first rather than a Teams/Discord-style workspace.
 
@@ -234,9 +322,28 @@ Disabled accounts have their sessions revoked and connected sockets are disconne
 
 `MAX_UPLOAD_BYTES` remains the initial default for a fresh database. Once changed from Administration, the database-backed value is used immediately for new uploads.
 
+
+## v0.11.3 chat request fixes
+
+- Incoming chat/contact requests now appear at the top of the normal conversation list instead of being buried in Contacts.
+- Incoming requests expose Accept/Decline directly from the chat list.
+- Accepting a request automatically creates/opens the direct conversation.
+- Accepted contacts can always DM each other unless one user blocks the other; accepting the request is treated as explicit chat permission.
+- Contact-request changes are pushed over Socket.IO so both clients refresh without requiring a manual reload.
+- The restrictive DM privacy label is now **No new DMs** to reflect that accepted contacts remain allowed.
+
 ## v0.11.1 mobile navigation fix
 
 - Adds persistent mobile bottom navigation for Chats, People, New, and Me.
 - Adds a back button to active conversations on mobile.
 - Contacts/directory and new-chat dialogs become full-screen mobile sheets.
 - Adds a coarse-pointer/phone-screen fallback so Android phones still use the mobile shell if Chrome reports a desktop-sized layout viewport.
+
+
+## v0.11.3 message-send reliability
+
+- Message submission now uses the authenticated HTTP API rather than requiring a live Socket.IO acknowledgement.
+- Socket.IO remains responsible for realtime incoming-message delivery, presence, typing, receipts and other live events.
+- Recipients do not need to be online for a message to be accepted and stored by the server.
+- Accepted contacts are recognized in either direction to tolerate legacy/asymmetric contact rows from earlier builds.
+- The existing Socket.IO `message:send` handler remains available for backward compatibility with older clients.
