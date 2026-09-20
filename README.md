@@ -1,41 +1,10 @@
 # HomeChat
 
-HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, and an installable PWA for desktop and mobile.
+HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, background notifications, and an installable PWA for desktop and mobile.
 
 **Current version:** `0.14.0`
 
-HomeChat is intended for LAN/VPN use. It is not currently designed to be exposed directly to the public Internet.
-
-## What v0.14.0 changes
-
-v0.14.0 is a UI/product-polish release focused on consistency, readability, and installability.
-
-- Replaces placeholder Unicode action glyphs with Lucide React SVG icons for consistent rendering across Windows, Android, iOS, and browsers.
-- Adds distinct unread-mention badges in the conversation list.
-- Adds subtle message/reaction/button motion with `prefers-reduced-motion` support.
-- Renders fenced code blocks and likely log/config pastes in a dedicated monospace block.
-- Adds automatic light mode through `prefers-color-scheme`.
-- Adds conversation-list skeleton loading and a blurred image placeholder transition.
-- Adds an in-app install card using `beforeinstallprompt` where supported, with iOS-specific Add to Home Screen guidance.
-
-No database reset is required. The conversation summary response now includes an unread `mentionCount`; existing databases and message data are unchanged.
-
-## What v0.13.0 changes
-
-v0.13.0 adds standards-based Web Push on top of the portable v0.12 deployment foundation.
-
-- Push subscriptions are stored per signed-in user and device.
-- VAPID keys are generated once and persisted under HomeChat appdata.
-- Closed/background installed PWAs can receive message notifications through the browser/OS push service.
-- Active Socket.IO devices are excluded from server push to avoid duplicate notifications on the same device.
-- Other subscribed devices can still receive push even when one device is actively connected.
-- Notification clicks focus/open HomeChat and select the relevant conversation.
-- Expired push endpoints are removed automatically when a push service reports them gone.
-- Push subscriptions are invalidated by logout/session expiry, account disable, and password reset.
-- iPhone/iPad users are guided to install HomeChat to the Home Screen before enabling background notifications.
-- The service-worker cache continues to be generated from the package version at build time.
-
-Existing messages, users, uploads, TLS certificates, and normal Socket.IO delivery are unchanged. Web Push is an additional notification channel, not a replacement for message storage or realtime delivery.
+HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly to the public Internet without additional hardening.
 
 ## Features
 
@@ -46,22 +15,22 @@ Existing messages, users, uploads, TLS certificates, and normal Socket.IO delive
 - Contacts and contact requests
 - Searchable user directory by display name or HID
 - Presence and typing indicators
-- Delivered/read receipts, unread counts, and distinct mention badges
+- Delivered/read receipts and unread counts
+- Distinct unread mention indicators
 - Message history pagination
 - Reactions, replies, edit, and soft-delete
 - Image paste and drag/drop uploads
 - Inline image, video, and audio playback
 - Browser-recorded voice snippets
+- Group and user avatars
 - Per-conversation Media / Files / Links views
 - Link previews
-- Styled fenced code/log blocks
+- Styled fenced code and log blocks
 - Dark and light color-scheme support
-- Branded PWA install prompt
-- User avatars
 - Privacy controls and block list
 - Administration screen
 - Installable PWA for Windows, Android, and iOS
-- Web Push notifications that continue when the installed PWA is closed
+- Web Push notifications for installed/backgrounded clients
 - SQLite persistence
 - Socket.IO realtime updates
 - Docker deployment
@@ -79,16 +48,16 @@ https://SERVER:8093
 
 Provides:
 
-- the certificate-install page
+- certificate-install page
 - `homechat-root-ca.crt`
-- a link to secure HomeChat
+- link to secure HomeChat
 - `/health`
 
-It does not serve chat, login, API, or Socket.IO traffic.
+It does not serve login, chat, API, or Socket.IO traffic.
 
 ### Port 8093 — secure HomeChat
 
-Provides the actual application, REST API, Socket.IO, attachments, service worker, and PWA functionality.
+Provides the application, REST API, Socket.IO, attachments, service worker, Web Push registration, and PWA functionality.
 
 ## Quick start
 
@@ -105,7 +74,7 @@ cd homechat
 cp .env.example .env
 ```
 
-Edit `.env` and set at least the address clients will use:
+Edit `.env` and set the address clients will use:
 
 ```env
 HOMECHAT_HOST=192.168.1.50
@@ -115,7 +84,7 @@ HOMECHAT_ADMIN_NAME=Admin
 HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
 ```
 
-`HOMECHAT_HOST` is used when generating the HTTPS certificate, so it should match the IP address or hostname users will enter in their browser.
+`HOMECHAT_HOST` is used when generating the HTTPS certificate, so it should match the IP address or hostname users enter in their browser.
 
 ### 3. Start
 
@@ -162,9 +131,9 @@ It is mounted inside the container at:
 /app/data
 ```
 
-This contains the SQLite database, uploads, and TLS material.
+This contains the SQLite database, uploads, TLS material, and VAPID keys used for Web Push.
 
-Docker manages the host-side storage location, so HomeChat no longer requires a specific user's home directory.
+Docker manages the host-side storage location, so HomeChat does not require a specific user's home directory.
 
 ### Optional bind mount
 
@@ -174,27 +143,7 @@ If you prefer a specific host path, set `HOMECHAT_DATA_PATH` in `.env`:
 HOMECHAT_DATA_PATH=/srv/homechat
 ```
 
-The same Compose file accepts either a Docker named volume or an absolute host path.
-
-## Upgrading an existing installation
-
-If the existing installation uses a host bind mount, keep using that same path during the v0.13.0 upgrade:
-
-```env
-HOMECHAT_DATA_PATH=/path/to/your/existing/homechat/appdata
-```
-
-Then deploy normally:
-
-```bash
-docker compose down
-git pull --ff-only
-docker compose up -d --build
-```
-
-Do **not** omit `HOMECHAT_DATA_PATH` on the first v0.13.0 start if the current installation relies on an existing bind-mounted database. If it is omitted, Docker creates/uses the new `homechat-data` volume and HomeChat will look like a fresh installation. The old bind-mounted files are not deleted.
-
-After confirming the upgrade, you can continue using the bind path indefinitely or migrate the data into the named volume later.
+Use the same path consistently so HomeChat continues using the same database, uploads, certificates, and push identity.
 
 ## Automatic TLS
 
@@ -204,7 +153,7 @@ By default:
 HOMECHAT_AUTO_TLS=true
 ```
 
-If the CA/server certificates do not exist, HomeChat generates:
+If certificates do not exist, HomeChat generates:
 
 ```text
 /app/data/tls/homechat-root-ca.crt
@@ -223,9 +172,9 @@ To manage certificates yourself:
 HOMECHAT_AUTO_TLS=false
 ```
 
-and provide the expected certificate/key files in the data directory or override their paths with the corresponding environment variables.
+Then provide the expected certificate/key files in the data directory or override their paths with the corresponding environment variables.
 
-`tools/create-test-tls.sh` remains available for manual certificate creation and no longer contains a user-specific output path.
+`tools/create-test-tls.sh` is also available for manual certificate creation.
 
 ## First administrator
 
@@ -238,7 +187,7 @@ HOMECHAT_ADMIN_PASSWORD=choose-a-strong-password
 
 These settings are bootstrap-only. Once any user exists, they are ignored and cannot rename an account or reset its password.
 
-For secret-file based deployments, set:
+For secret-file based deployments:
 
 ```env
 HOMECHAT_ADMIN_NAME=Admin
@@ -258,30 +207,36 @@ A HomeChat account has:
 
 Display names are unique case-insensitively. The HID remains unchanged if a display name changes.
 
+## Background notifications
 
-## Background notifications (Web Push)
+HomeChat supports standards-based Web Push in addition to realtime Socket.IO delivery.
 
-HomeChat 0.13 adds standards-based Web Push. Messages are still stored in SQLite and delivered through the normal HomeChat API/Socket.IO paths; push is only a notification channel.
+When notifications are enabled, the browser creates a per-device push subscription and HomeChat stores it against the signed-in user and device.
 
-When a user enables notifications, the browser creates a per-device push subscription and HomeChat stores the subscription against that signed-in user and device. If that device has an active Socket.IO connection, HomeChat does not also push to the same device. Other subscribed devices can still receive background notifications.
+- Messages remain stored in SQLite and delivered through the normal API/Socket.IO paths.
+- Push is a notification channel, not the message transport.
+- Active devices are excluded from redundant push notifications.
+- Other subscribed devices can still be notified.
+- Expired push subscriptions are removed automatically.
+- Notification clicks open/focus HomeChat and select the relevant conversation.
 
-VAPID keys are generated once on first startup and persisted under:
+VAPID keys are generated once and persisted at:
 
 ```text
 /app/data/push/vapid.json
 ```
 
-Back up this file with the rest of HomeChat appdata. Replacing the VAPID key pair requires clients to create new push subscriptions. The private key must never be committed or exposed.
+Back this file up with the rest of HomeChat appdata. Replacing the VAPID key pair requires clients to establish new push subscriptions.
 
-The optional VAPID contact identity can be configured in `.env`:
+Optional VAPID contact identity:
 
 ```env
 HOMECHAT_VAPID_SUBJECT=mailto:homechat@example.invalid
 ```
 
-The HomeChat server needs outbound HTTPS access to browser push services. iPhone and iPad background push requires HomeChat to be added to the Home Screen and notification permission to be requested from the installed web app. iOS/iPadOS 16.4 or later supports this standards-based Web Push model.
+The HomeChat server needs outbound HTTPS access to browser push services.
 
-Push subscriptions are tied to an authenticated session. Logging out removes the server-side association; the browser subscription can be reused after the next login. If logout happens while the server is unreachable, the client unsubscribes locally so a stale server record cannot continue delivering notifications. Expired/revoked sessions are not eligible for push, and disabling an account or resetting its password removes its stored push subscriptions.
+On iPhone and iPad, background Web Push requires HomeChat to be installed to the Home Screen and notification permission to be granted from the installed web app.
 
 ## Administration
 
@@ -291,8 +246,8 @@ Administrators can:
 - enable or disable self-registration
 - require an optional invite code
 - change the attachment-size limit
-- create users/admins
-- enable/disable accounts
+- create users and administrators
+- enable or disable accounts
 - reset passwords
 - revoke sessions
 
@@ -314,49 +269,36 @@ Open the HTTPS site in Chrome and use **Install app** or **Add to Home screen**.
 
 ### Windows
 
-Open the HTTPS site in Edge/Chrome and use the browser's **Install app** action.
+Open the HTTPS site in Edge or Chrome and use the browser's **Install app** action.
 
 ## Service-worker updates
 
 The client build generates `public/sw.js` from `sw.template.js` using the version in `client/package.json`.
 
-For v0.14.0 the cache name is generated as:
-
-```text
-homechat-v0.14.0
-```
-
-When a new service worker activates, older `homechat-*` caches are removed automatically.
+The cache name is generated automatically from the application version. Older `homechat-*` caches are removed when a new service worker activates.
 
 Do not manually maintain the cache version string.
-
-## Notifications
-
-HomeChat supports both realtime in-app notifications and standards-based Web Push.
-
-- Socket.IO handles realtime delivery while a client is connected.
-- Web Push uses persisted VAPID keys and per-device subscriptions so an installed PWA can receive notifications while backgrounded or closed.
-- Active devices are excluded from redundant server push while other subscribed devices can still be notified.
-- Expired push subscriptions are cleaned up automatically.
-- On iPhone/iPad, HomeChat must be installed to the Home Screen before background Web Push can be enabled.
 
 ## Offline behavior
 
 The cached PWA shell can load without a network connection, but authentication requires the server.
 
-When HomeChat is offline, the sign-in screen now reports:
-
-```text
-HomeChat is offline. Reconnect before signing in.
-```
+When HomeChat is offline, the sign-in screen reports that the server must be reachable before signing in.
 
 Offline message queuing is not currently implemented.
 
 ## Backup
 
-For a bind-mounted installation, back up the configured data directory.
+Back up the persistent HomeChat data, including:
 
-For the default Docker volume, inspect it with:
+```text
+/app/data/homechat.db
+/app/data/uploads/
+/app/data/tls/
+/app/data/push/
+```
+
+For the default Docker volume:
 
 ```bash
 docker volume inspect homechat_homechat-data
@@ -364,12 +306,11 @@ docker volume inspect homechat_homechat-data
 
 The exact Docker volume name may include the Compose project prefix.
 
+For a bind-mounted installation, back up the configured host data directory.
+
 Stop HomeChat before taking a filesystem-level copy of the SQLite database if you want a simple consistent backup.
 
 ## Updating
-
-Upgrading an existing 0.12.x database to 0.13.0 is automatic. HomeChat adds the push-subscription table without resetting users, messages, uploads, sessions, or TLS material. VAPID keys are created separately under the existing appdata directory.
-
 
 ```bash
 git pull --ff-only
@@ -407,7 +348,7 @@ Typical release workflow:
 ```bash
 git status
 git add .
-git commit -m "HomeChat v0.14.0 UI polish"
+git commit -m "HomeChat v0.14.0"
 git push origin main
 ```
 
@@ -435,38 +376,41 @@ data/
 *.pfx
 ```
 
-Private TLS keys and administrator secrets must remain private.
+Private TLS keys, VAPID private keys, and administrator secrets must remain private.
 
 ## Security notes
 
-HomeChat currently provides authenticated API access, server-side privacy/block enforcement, session revocation, upload limits, basic HTTP hardening, and link-preview SSRF restrictions.
+HomeChat currently provides authenticated API access, server-side privacy/block enforcement, session revocation, upload limits, basic HTTP hardening, link-preview SSRF restrictions, HTTPS, and standards-based Web Push.
 
 It does not currently provide:
 
 - end-to-end encryption
 - Internet-scale abuse protection
-- background Web Push notifications
-- native mobile push
+- native mobile push infrastructure
 - voice/video calling
+
+Do not expose HomeChat directly to the public Internet without additional review and hardening.
 
 ## Troubleshooting
 
-### HomeChat looks like a fresh install after upgrading
+### HomeChat looks like a fresh install
 
-Check whether the new deployment is using `homechat-data` instead of the previous bind-mounted data path.
+Check whether the deployment is using a different persistent volume or bind-mounted data path than before.
 
-Set the old path in `.env`:
+If using a bind mount, confirm `.env` contains the expected path:
 
 ```env
 HOMECHAT_DATA_PATH=/path/to/existing/appdata
 ```
 
-and restart.
-
 ### HTTPS certificate name error
 
-Confirm `HOMECHAT_HOST` matches the address being used in the browser. If you change the host after certificates have already been generated, remove/regenerate only the server certificate deliberately or use the manual TLS helper. Do not casually delete the root CA if devices already trust it.
+Confirm `HOMECHAT_HOST` matches the address used in the browser.
+
+If the host changes after certificates have already been generated, regenerate the server certificate deliberately. Avoid deleting the root CA unless you intend to reinstall trust on every client.
 
 ### No administrator exists
 
-On an empty database, configure `HOMECHAT_ADMIN_NAME` plus either `HOMECHAT_ADMIN_PASSWORD` or `HOMECHAT_ADMIN_PASSWORD_FILE`, then restart. `/api/setup` is also available until the first user is created.
+On an empty database, configure `HOMECHAT_ADMIN_NAME` plus either `HOMECHAT_ADMIN_PASSWORD` or `HOMECHAT_ADMIN_PASSWORD_FILE`, then restart.
+
+`/api/setup` is also available until the first user is created.
