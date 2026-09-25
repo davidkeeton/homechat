@@ -1,6 +1,6 @@
 [package]
 name = "homechat-desktop"
-version = "0.15.0"
+version = "0.15.2"
 description = "HomeChat Windows desktop client"
 authors = ["HomeChat"]
 edition = "2021"

@@ -1,5 +1,6 @@
 FROM node:22-alpine AS client-build
 WORKDIR /app/client
+COPY package.json /app/package.json
 COPY client/package*.json ./
 RUN npm install
 COPY client ./

@@ -1,11 +1,22 @@
 import path from 'node:path';
+import fs from 'node:fs';
 
-export const APP_VERSION = '0.15.0';
+function readAppVersion(): string {
+  try {
+    const packageUrl = new URL('../package.json', import.meta.url);
+    const pkg = JSON.parse(fs.readFileSync(packageUrl, 'utf8')) as { version?: unknown };
+    const version = String(pkg.version ?? '').trim();
+    return version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+export const APP_VERSION = readAppVersion();
 
 const dataDir = path.resolve(process.env.DATA_DIR ?? './data');
 const tlsDir = path.resolve(process.env.TLS_DIR ?? path.join(dataDir,'tls'));
 const pushDir = path.resolve(process.env.PUSH_DIR ?? path.join(dataDir,'push'));
-
 
 export const config = {
   host: process.env.HOST ?? '0.0.0.0',

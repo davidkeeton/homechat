@@ -106,5 +106,26 @@ export class HomeClient {
   receipt(messageId:number,kind:'delivered'|'read'){ this.socket?.emit('receipt:set',{messageId,kind}); }
   async upload(file:File){ const fd=new FormData();fd.append('file',file); return this.api<FileView>('/api/files',{method:'POST',body:fd}); }
   async uploadAvatar(file:File){ const fd=new FormData();fd.append('file',file); return this.api<User>('/api/me/avatar',{method:'POST',body:fd}); }
-  async fileBlob(fileId:number){ const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}}); if(!r.ok)throw await responseError(r); return r.blob(); }
+  async fileBlob(fileId:number){
+    const r=await fetch(`${this.baseUrl}/api/files/${fileId}`,{headers:{Authorization:`Bearer ${this.token}`}});
+    if(!r.ok)throw await responseError(r);
+    return r.blob();
+  }
+
+  async downloadFile(file:FileView){
+    const blob=await this.fileBlob(file.id);
+    if(file.size>0&&blob.size===0)throw new Error('download_empty');
+    const url=URL.createObjectURL(blob);
+    try{
+      const anchor=document.createElement('a');
+      anchor.href=url;
+      anchor.download=file.name;
+      anchor.style.display='none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    }finally{
+      window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+  }
 }

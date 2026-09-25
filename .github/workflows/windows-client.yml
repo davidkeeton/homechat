@@ -20,6 +20,9 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
+      - name: Check HomeChat version consistency
+        run: npm run version:check
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 

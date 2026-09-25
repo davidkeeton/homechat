@@ -88,21 +88,42 @@ function useFileUrl(client:HomeClient,file?:FileView|null){
 }
 
 function Attachment({client,message}:{client:HomeClient;message:UiMessage}){
-  const fetched=useFileUrl(client,message.file); const url=message.localFileUrl||fetched; const [lightbox,setLightbox]=useState<Lightbox>(null); const [imageReady,setImageReady]=useState(false);
+  const fetched=useFileUrl(client,message.file);
+  const url=message.localFileUrl||fetched;
+  const [lightbox,setLightbox]=useState<Lightbox>(null);
+  const [imageReady,setImageReady]=useState(false);
+  const [downloading,setDownloading]=useState(false);
+  const [downloadError,setDownloadError]=useState('');
+
   if(!message.file) return null;
-  if(message.file.mimeType.startsWith('audio/')) return <div className="attachment audio"><span className="voice-label">🎤 Voice message</span><audio controls preload="metadata" src={url}/></div>;
-  if(message.file.mimeType.startsWith('video/')) return <div className="attachment video"><video controls preload="metadata" src={url}/><span>{message.file.name}</span></div>;
+  const file=message.file;
+
+  async function download(){
+    if(file.id<=0||downloading)return;
+    setDownloading(true);
+    setDownloadError('');
+    try{
+      await client.downloadFile(file);
+    }catch{
+      setDownloadError('Download failed');
+    }finally{
+      setDownloading(false);
+    }
+  }
+
+  if(file.mimeType.startsWith('audio/')) return <div className="attachment audio"><span className="voice-label">🎤 Voice message</span><audio controls preload="metadata" src={url}/><button type="button" className="download-mark" onClick={()=>void download()} title="Download"><Download size={17}/></button>{downloadError&&<small>{downloadError}</small>}</div>;
+  if(file.mimeType.startsWith('video/')) return <div className="attachment video"><video controls preload="metadata" src={url}/><span>{file.name}</span><button type="button" className="download-mark" onClick={()=>void download()} title="Download"><Download size={17}/></button>{downloadError&&<small>{downloadError}</small>}</div>;
   if(message.type==='image') return <>
-    <button className={`attachment image ${imageReady?'loaded':'loading'}`} onClick={()=>url&&setLightbox({url,name:message.file!.name})} title="Open image">
-      <span className="image-placeholder" aria-hidden="true"/><img src={url} alt={message.file.name} onLoad={()=>setImageReady(true)}/><span>{message.file.name}</span>
+    <button className={`attachment image ${imageReady?'loaded':'loading'}`} onClick={()=>url&&setLightbox({url,name:file.name})} title="Open image">
+      <span className="image-placeholder" aria-hidden="true"/><img src={url} alt={file.name} onLoad={()=>setImageReady(true)}/><span>{file.name}</span>
     </button>
-    {lightbox&&<div className="lightbox" onMouseDown={()=>setLightbox(null)}><div className="lightbox-card" onMouseDown={e=>e.stopPropagation()}><div className="lightbox-head"><span>{lightbox.name}</span><a href={lightbox.url} download={lightbox.name} title="Download"><Download size={16}/></a><button onClick={()=>setLightbox(null)} title="Close"><X size={18}/></button></div><img src={lightbox.url} alt={lightbox.name}/></div></div>}
+    {lightbox&&<div className="lightbox" onMouseDown={()=>setLightbox(null)}><div className="lightbox-card" onMouseDown={e=>e.stopPropagation()}><div className="lightbox-head"><span>{lightbox.name}</span><button type="button" onClick={()=>void download()} title="Download" disabled={downloading}><Download size={16}/></button><button onClick={()=>setLightbox(null)} title="Close"><X size={18}/></button></div><img src={lightbox.url} alt={lightbox.name}/>{downloadError&&<small>{downloadError}</small>}</div></div>}
   </>;
-  return <a className="attachment file" href={url} download={message.file.name}>
-    <span className="file-glyph">{fileGlyph(message.file.name,message.file.mimeType)}</span>
-    <span className="file-meta"><strong>{message.file.name}</strong><small>{fmtBytes(message.file.size)}</small></span>
+  return <button type="button" className="attachment file" onClick={()=>void download()} disabled={downloading} title={downloadError||'Download file'}>
+    <span className="file-glyph">{fileGlyph(file.name,file.mimeType)}</span>
+    <span className="file-meta"><strong>{file.name}</strong><small>{downloadError||`${fmtBytes(file.size)}${downloading?' · downloading…':''}`}</small></span>
     <span className="download-mark"><Download size={19}/></span>
-  </a>;
+  </button>;
 }
 
 function LinkPreviewCard({client,url,compact=false}:{client:HomeClient;url:string;compact?:boolean}){
@@ -145,8 +166,21 @@ function InventoryMediaItem({client,item}:{client:HomeClient;item:InventoryAttac
 }
 
 function InventoryFileItem({client,item}:{client:HomeClient;item:InventoryAttachment}){
-  const url=useFileUrl(client,item.file);
-  return <a className="inventory-file" href={url} download={item.file.name}><span className="file-glyph">{fileGlyph(item.file.name,item.file.mimeType)}</span><span><strong>{item.file.name}</strong><small>{fmtBytes(item.file.size)} · {fmtDateTime(item.createdAt)}</small></span><b><Download size={16}/></b></a>;
+  const [downloading,setDownloading]=useState(false);
+  const [error,setError]=useState('');
+  async function download(){
+    if(downloading)return;
+    setDownloading(true);
+    setError('');
+    try{await client.downloadFile(item.file);}
+    catch{setError('Download failed');}
+    finally{setDownloading(false);}
+  }
+  return <button type="button" className="inventory-file" onClick={()=>void download()} disabled={downloading}>
+    <span className="file-glyph">{fileGlyph(item.file.name,item.file.mimeType)}</span>
+    <span><strong>{item.file.name}</strong><small>{error||`${fmtBytes(item.file.size)} · ${fmtDateTime(item.createdAt)}${downloading?' · downloading…':''}`}</small></span>
+    <b><Download size={16}/></b>
+  </button>;
 }
 
 function ContextDrawer({client,conversation,me,users,online,view,target,onView,onClose,onCopy,onChangeAvatar,onChangeGroupAvatar,onChangeDisplayName,onRenameGroup,onAddMember,onRemoveMember,onLeaveGroup,onDeleteConversation}:{client:HomeClient;conversation:Conversation|null;me:User;users:User[];online:Set<number>;view:'details'|'media'|'files'|'links';target:'me'|'conversation';onView:(v:'details'|'media'|'files'|'links')=>void;onClose:()=>void;onCopy:(text:string,label:string)=>void;onChangeAvatar:()=>void;onChangeGroupAvatar:(file:File)=>Promise<void>;onChangeDisplayName:(name:string)=>Promise<void>;onRenameGroup:(name:string)=>Promise<void>;onAddMember:(userId:number)=>Promise<void>;onRemoveMember:(userId:number)=>Promise<void>;onLeaveGroup:()=>Promise<void>;onDeleteConversation:()=>Promise<void>}){

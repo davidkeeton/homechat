@@ -1,10 +1,10 @@
 # HomeChat
 
-HomeChat is a small self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, voice snippets, Saved Messages, background notifications, and an installable PWA for desktop and mobile.
+HomeChat is a self-hosted messenger for a household or other trusted private network. It provides direct and group messaging, contacts, presence, attachments, Saved Messages, background notifications, an installable PWA, and a native Windows client.
 
-**Current version:** `0.15.0`
+**Current version:** `0.15.2`
 
-HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly to the public Internet without additional hardening.
+HomeChat is intended primarily for LAN/VPN use. It is not intended to be exposed directly to the public Internet without additional review and hardening.
 
 ## Features
 
@@ -19,7 +19,9 @@ HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly 
 - Distinct unread mention indicators
 - Message history pagination
 - Reactions, replies, edit, and soft-delete
+- Per-user **Delete chat** history clearing
 - Image paste and drag/drop uploads
+- Authenticated file downloads
 - Inline image, video, and audio playback
 - Browser-recorded voice snippets
 - Group and user avatars
@@ -30,11 +32,13 @@ HomeChat is intended for LAN/VPN use. It is not designed to be exposed directly 
 - Privacy controls and block list
 - Administration screen
 - Installable PWA for Windows, Android, and iOS
-- Native Windows desktop client with system tray and Windows notifications
-- Web Push notifications for installed/backgrounded clients
+- Native Windows desktop client with system tray and native notifications
+- Windows-client download links on the sign-in and certificate/bootstrap pages
+- Web Push notifications for installed/backgrounded web clients
 - SQLite persistence
 - Socket.IO realtime updates
 - Docker deployment
+- Experimental Xbox Game Bar client under `gamebar/`
 
 ## Network layout
 
@@ -51,6 +55,7 @@ Provides:
 
 - certificate-install page
 - `homechat-root-ca.crt`
+- Windows client download link
 - link to secure HomeChat
 - `/health`
 
@@ -58,7 +63,7 @@ It does not serve login, chat, API, or Socket.IO traffic.
 
 ### Port 8093 — secure HomeChat
 
-Provides the application, REST API, Socket.IO, attachments, service worker, Web Push registration, and PWA functionality.
+Provides the application, REST API, Socket.IO, attachments, authenticated downloads, service worker, Web Push registration, PWA functionality, and the Windows client download route.
 
 ## Quick start
 
@@ -132,7 +137,7 @@ It is mounted inside the container at:
 /app/data
 ```
 
-This contains the SQLite database, uploads, TLS material, and VAPID keys used for Web Push.
+This contains the SQLite database, uploads, TLS material, VAPID keys, and optionally a locally hosted Windows installer.
 
 Docker manages the host-side storage location, so HomeChat does not require a specific user's home directory.
 
@@ -144,7 +149,7 @@ If you prefer a specific host path, set `HOMECHAT_DATA_PATH` in `.env`:
 HOMECHAT_DATA_PATH=/srv/homechat
 ```
 
-Use the same path consistently so HomeChat continues using the same database, uploads, certificates, and push identity.
+Use the same path consistently so HomeChat continues using the same database, uploads, certificates, push identity, and downloads.
 
 ## Automatic TLS
 
@@ -174,8 +179,6 @@ HOMECHAT_AUTO_TLS=false
 ```
 
 Then provide the expected certificate/key files in the data directory or override their paths with the corresponding environment variables.
-
-`tools/create-test-tls.sh` is also available for manual certificate creation.
 
 ## First administrator
 
@@ -208,18 +211,38 @@ A HomeChat account has:
 
 Display names are unique case-insensitively. The HID remains unchanged if a display name changes.
 
+## Attachments and downloads
+
+Uploads are written into the persistent upload directory and stored in SQLite by metadata/reference.
+
+File retrieval is authenticated. The web client fetches attachments with the active bearer token, waits for the blob to complete, then creates the browser download. This prevents empty placeholder downloads while a blob URL is still being prepared.
+
+The configured upload limit is visible to clients and can be changed by an administrator.
+
+## Delete chat
+
+**Delete chat** is per-user history clearing. It does not erase another user's copy of the conversation.
+
+When a user deletes a chat:
+
+- their visible history is cleared through the current message
+- the conversation is hidden for that user
+- the other participant's history is unchanged
+- a new incoming message can make the conversation visible again
+- messages cleared by that user remain hidden from that user
+
+Leaving a group and deleting a group-chat history remain separate actions.
+
 ## Background notifications
 
 HomeChat supports standards-based Web Push in addition to realtime Socket.IO delivery.
 
-When notifications are enabled, the browser creates a per-device push subscription and HomeChat stores it against the signed-in user and device.
-
-- Messages remain stored in SQLite and delivered through the normal API/Socket.IO paths.
-- Push is a notification channel, not the message transport.
-- Active devices are excluded from redundant push notifications.
-- Other subscribed devices can still be notified.
+- Messages are stored in SQLite first.
+- Socket.IO handles realtime message/presence/typing updates.
+- Web Push notifies closed/background web clients.
+- Push subscriptions are per user, session, and device.
+- Active-device push is suppressed while other subscribed devices may still receive it.
 - Expired push subscriptions are removed automatically.
-- Notification clicks open/focus HomeChat and select the relevant conversation.
 
 VAPID keys are generated once and persisted at:
 
@@ -227,7 +250,7 @@ VAPID keys are generated once and persisted at:
 /app/data/push/vapid.json
 ```
 
-Back this file up with the rest of HomeChat appdata. Replacing the VAPID key pair requires clients to establish new push subscriptions.
+Back this file up with the rest of HomeChat appdata.
 
 Optional VAPID contact identity:
 
@@ -237,12 +260,15 @@ HOMECHAT_VAPID_SUBJECT=mailto:homechat@example.invalid
 
 The HomeChat server needs outbound HTTPS access to browser push services.
 
-On iPhone and iPad, background Web Push requires HomeChat to be installed to the Home Screen and notification permission to be granted from the installed web app.
-
-
 ## Windows desktop client
 
-HomeChat includes a Tauri-based Windows client in `desktop/`. It reuses the same React chat UI and connects to the same HomeChat server API and Socket.IO service.
+HomeChat includes a Tauri-based Windows client under:
+
+```text
+desktop/
+```
+
+It reuses the React UI and connects to the same HomeChat API and Socket.IO service.
 
 The first time the desktop client starts, enter the secure HomeChat server address, for example:
 
@@ -250,39 +276,90 @@ The first time the desktop client starts, enter the secure HomeChat server addre
 https://192.168.1.50:8093
 ```
 
-The HomeChat CA certificate must already be trusted by Windows. The desktop client does not bypass TLS certificate validation.
+The HomeChat CA certificate must already be trusted by Windows. The desktop client does not bypass TLS validation.
 
-Closing the main window hides HomeChat to the Windows system tray instead of terminating it. This keeps the Socket.IO connection alive so the desktop client can receive messages and display native Windows notifications while the window is hidden. Use **Quit HomeChat** from the tray menu to stop the client completely.
+Closing the main window hides HomeChat to the Windows system tray. Use **Quit HomeChat** from the tray menu to exit completely.
 
-### Build locally on Windows
+### Manual GitHub Actions build
 
-Tauri requires the Microsoft C++ build tools, WebView2, Rust, and Node.js. WebView2 is already present on current Windows versions.
+Windows builds are intentionally **on demand**. They do not run on every push.
 
-Install the JavaScript dependencies:
+Open:
+
+```text
+GitHub → Actions → Build Windows client → Run workflow
+```
+
+The workflow:
+
+1. verifies version consistency
+2. builds the Tauri Windows client
+3. uploads the `.exe` and `.msi` as workflow artifacts
+4. updates the `windows-client-latest` GitHub release
+5. publishes the predictable filename `HomeChat-Windows-Setup.exe`
+
+### Windows download link
+
+HomeChat serves this route from both the bootstrap and secure servers:
+
+```text
+/downloads/HomeChat-Windows-Setup.exe
+```
+
+If this local file exists:
+
+```text
+/app/data/downloads/HomeChat-Windows-Setup.exe
+```
+
+HomeChat serves it directly.
+
+Otherwise it redirects to:
+
+```text
+https://github.com/davidkeeton/homechat/releases/download/windows-client-latest/HomeChat-Windows-Setup.exe
+```
+
+Override the fallback URL with:
+
+```env
+HOMECHAT_WINDOWS_CLIENT_URL=https://example.invalid/HomeChat-Windows-Setup.exe
+```
+
+For a bind-mounted installation, the local installer would normally be placed at:
+
+```text
+HOMECHAT_DATA_PATH/downloads/HomeChat-Windows-Setup.exe
+```
+
+## Build the Windows client locally
+
+On Windows, install the Microsoft C++ build tools, WebView2, Rust, and Node.js.
 
 ```powershell
 npm install --prefix client
 npm install --prefix desktop
-```
-
-Build the Windows installers:
-
-```powershell
 npm --prefix desktop run build
 ```
 
-Tauri produces NSIS (`-setup.exe`) and MSI installers under:
+Installers are produced under:
 
 ```text
 desktop/src-tauri/target/release/bundle/nsis/
 desktop/src-tauri/target/release/bundle/msi/
 ```
 
-Unsigned development builds may trigger Microsoft SmartScreen. Code signing can be added later for public distribution.
+Unsigned development builds may trigger Microsoft SmartScreen.
 
-### Build with GitHub Actions
+## Experimental Xbox Game Bar client
 
-The repository includes `.github/workflows/windows-client.yml`. Run **Build Windows client** manually from GitHub Actions, or push a version tag. The workflow builds both Windows installer formats and uploads them as artifacts. Tagged builds are also attached to the GitHub release.
+The repository includes an experimental UWP/XAML Game Bar client under:
+
+```text
+gamebar/
+```
+
+It is an alpha client and is not part of the normal Docker or Tauri build. See `gamebar/README.md` for Visual Studio requirements and current limitations.
 
 ## Administration
 
@@ -315,33 +392,106 @@ Open the HTTPS site in Chrome and use **Install app** or **Add to Home screen**.
 
 ### Windows
 
-Open the HTTPS site in Edge or Chrome and use the browser's **Install app** action.
+Use the native HomeChat Windows client, or install the HTTPS site as a PWA from Edge/Chrome.
 
 ## Service-worker updates
 
-The client build generates `public/sw.js` from `sw.template.js` using the version in `client/package.json`.
+The repository root `package.json` is the authoritative HomeChat version.
 
-The cache name is generated automatically from the application version. Older `homechat-*` caches are removed when a new service worker activates.
+The client build generates `client/public/sw.js` from `client/sw.template.js` using that root version. Older `homechat-*` caches are removed when a new service worker activates.
 
-Do not manually maintain the cache version string.
+Do not manually maintain the service-worker cache version.
 
-## Offline behavior
+## Version control and releases
 
-The cached PWA shell can load without a network connection, but authentication requires the server.
+`main` is the active development branch and source of truth.
 
-When HomeChat is offline, the sign-in screen reports that the server must be reachable before signing in.
+HomeChat uses semantic versioning:
 
-Offline message queuing is not currently implemented.
+- bug fix: patch bump, for example `0.15.2 → 0.15.3`
+- backward-compatible feature: minor bump, for example `0.15.x → 0.16.0`
+- intentionally incompatible release: major bump when appropriate
+
+### One authoritative version
+
+The root `package.json` version is authoritative. The release tooling keeps these synchronized:
+
+```text
+package.json
+client/package.json
+desktop/package.json
+desktop/src-tauri/Cargo.toml
+desktop/src-tauri/tauri.conf.json
+client/public/sw.js
+README.md
+```
+
+The server `/health` value is read from the root package version at runtime.
+
+### Change the version
+
+From the repository root:
+
+```bash
+npm run version:set -- 0.15.3
+```
+
+Then verify all versioned files agree:
+
+```bash
+npm run version:check
+```
+
+Do not manually edit version strings in individual package/config files.
+
+### Commit a release
+
+After the change is tested:
+
+```bash
+git status
+git add .
+git commit -m "HomeChat v0.15.3"
+git push origin main
+```
+
+Tag the exact tested commit:
+
+```bash
+git tag -a v0.15.3 -m "HomeChat v0.15.3"
+git push origin v0.15.3
+```
+
+The Windows workflow remains manual even when a tag is pushed. Run it after the tagged commit is ready if a new Windows installer should be published.
+
+## Updating an existing server
+
+```bash
+git pull --ff-only
+docker compose down
+docker compose up -d --build
+```
+
+Verify:
+
+```bash
+docker compose ps
+curl http://SERVER:8092/health
+curl https://SERVER:8093/health
+```
+
+The secure `curl` request requires the HomeChat CA to be trusted by that system.
 
 ## Backup
 
-Back up the persistent HomeChat data, including:
+Back up persistent HomeChat data, including:
 
 ```text
 /app/data/homechat.db
 /app/data/uploads/
 /app/data/tls/
 /app/data/push/
+/app/data/downloads/
 ```
 
 For the default Docker volume:
@@ -350,60 +500,9 @@ For the default Docker volume:
 docker volume inspect homechat_homechat-data
 ```
 
-The exact Docker volume name may include the Compose project prefix.
-
 For a bind-mounted installation, back up the configured host data directory.
 
-Stop HomeChat before taking a filesystem-level copy of the SQLite database if you want a simple consistent backup.
-
-## Updating
-
-```bash
-git pull --ff-only
-docker compose down
-docker compose up -d --build
-```
-
-Then verify:
-
-```bash
-docker compose ps
-docker logs homechat --tail 100
-```
-
-## Health checks
-
-Bootstrap:
-
-```bash
-curl http://SERVER:8092/health
-```
-
-Secure application after trusting the CA:
-
-```bash
-curl https://SERVER:8093/health
-```
-
-## Version control
-
-`main` is the active development branch.
-
-Typical release workflow:
-
-```bash
-git status
-git add .
-git commit -m "HomeChat v0.15.0"
-git push origin main
-```
-
-After testing:
-
-```bash
-git tag -a v0.15.0 -m "HomeChat v0.15.0"
-git push origin v0.15.0
-```
+Stop HomeChat before taking a simple filesystem-level copy of the SQLite database if you want a consistent snapshot.
 
 ## Files that must not be committed
 
@@ -420,9 +519,10 @@ data/
 *.pem
 *.p12
 *.pfx
+desktop/src-tauri/target/
 ```
 
-Private TLS keys, VAPID private keys, and administrator secrets must remain private.
+Private TLS keys, VAPID private keys, administrator secrets, databases, and runtime uploads must remain private.
 
 ## Security notes
 
@@ -455,8 +555,14 @@ Confirm `HOMECHAT_HOST` matches the address used in the browser.
 
 If the host changes after certificates have already been generated, regenerate the server certificate deliberately. Avoid deleting the root CA unless you intend to reinstall trust on every client.
 
-### No administrator exists
+### Windows installer link says no file
 
-On an empty database, configure `HOMECHAT_ADMIN_NAME` plus either `HOMECHAT_ADMIN_PASSWORD` or `HOMECHAT_ADMIN_PASSWORD_FILE`, then restart.
+Run the manual **Build Windows client** GitHub Action at least once so the `windows-client-latest` release contains `HomeChat-Windows-Setup.exe`, or place a local copy at:
 
-`/api/setup` is also available until the first user is created.
+```text
+/app/data/downloads/HomeChat-Windows-Setup.exe
+```
+
+### Downloaded chat attachment is empty
+
+This release uses explicit authenticated blob downloads rather than clicking an empty placeholder URL. If a file still downloads as zero bytes, check the corresponding stored file in `/app/data/uploads/` and compare it with the size recorded in HomeChat.
