@@ -74,6 +74,7 @@ export class HomeClient {
   block(userId:number){ return this.api<void>('/api/blocks',{method:'POST',body:JSON.stringify({userId})}); }
   unblock(userId:number){ return this.api<void>(`/api/blocks/${userId}`,{method:'DELETE'}); }
   conversations(){ return this.api<Conversation[]>('/api/conversations'); }
+  deleteConversation(conversationId:number){ return this.api<void>(`/api/conversations/${conversationId}`,{method:'DELETE'}); }
   messages(conversationId:number,before?:number){ return this.api<Message[]>(`/api/conversations/${conversationId}/messages${before?`?before=${before}`:''}`); }
   inventory(conversationId:number){ return this.api<ConversationInventory>(`/api/conversations/${conversationId}/inventory`); }
   linkPreview(url:string){ return this.api<LinkPreview>(`/api/link-preview?url=${encodeURIComponent(url)}`); }

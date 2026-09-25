@@ -8,7 +8,7 @@ jobs:
     runs-on: windows-latest
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Check out repository
@@ -35,11 +35,50 @@ jobs:
         shell: bash
         run: npm --prefix desktop run build
 
-      - name: Upload Windows installers
+      - name: Prepare predictable installer filename
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $installer = Get-ChildItem "desktop/src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced." }
+          Copy-Item $installer.FullName "dist/HomeChat-Windows-Setup.exe" -Force
+
+          $msi = Get-ChildItem "desktop/src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
+          if ($msi) {
+            Copy-Item $msi.FullName "dist/HomeChat-Windows.msi" -Force
+          }
+
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
           name: homechat-windows
           if-no-files-found: error
           path: |
-            desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/msi/*.msi
+            dist/HomeChat-Windows-Setup.exe
+            dist/HomeChat-Windows.msi
+
+      - name: Create or update latest Windows client release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view windows-client-latest --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create windows-client-latest `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:GITHUB_SHA `
+              --title "HomeChat Windows Client" `
+              --notes "Latest manually built HomeChat Windows client."
+          }
+
+          gh release upload windows-client-latest `
+            "dist/HomeChat-Windows-Setup.exe" `
+            --clobber `
+            --repo $env:GITHUB_REPOSITORY
+
+          if (Test-Path "dist/HomeChat-Windows.msi") {
+            gh release upload windows-client-latest `
+              "dist/HomeChat-Windows.msi" `
+              --clobber `
+              --repo $env:GITHUB_REPOSITORY
+          }

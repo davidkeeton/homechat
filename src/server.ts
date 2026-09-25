@@ -13,10 +13,10 @@ import { ensureTlsMaterial } from './tls.js';
 import { requireAuth } from './auth.js';
 import { hashToken, randomStoredName, verifyPassword } from './security.js';
 import {
-  acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
+  acceptContactRequest, adminUsers, blockUser, canMessageUser, canSeePresence, clearConversationForUser, contactRequests, conversationInventory, conversationMemberIds, conversationSummaries, createGroup, createMessage, createSession, createUser,
   directConversationBlocked, directConversationPrivacyBlocked, findOrCreateDirect, findOrCreateSelf, getAvatarFile, getCachedLinkPreview, getFile, getPrivacy, getServiceSettings, getUserById, getUserForLogin, history,
   deleteMessage, declineContactRequest, editMessage, insertFile, isBlockedPair, isMember, listBlocked, listContacts, listUsers, markReceipt, messageById, removeContact, resetUserPassword, revokeToken, saveLinkPreview, searchDirectory, searchMessages, sendContactRequest, setPrivacy, setDisplayName, setUserAvatar, setGroupAvatar, setUserDisabled, storageStats, toggleReaction, unblockUser, updateServiceSettings, userCount,
-  userFromToken, addGroupMember, removeGroupMember, renameGroup, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists, upsertPushSubscription, deletePushSubscription, pruneStalePushSubscriptions
+  userFromToken, addGroupMember, removeGroupMember, renameGroup, restoreConversationForUser, fileIsReferencedForUser, setting, pruneExpiredSessions, pruneOrphanFiles, userExists, upsertPushSubscription, deletePushSubscription, pruneStalePushSubscriptions
 } from './db.js';
 import type { LinkPreview, MessageView } from './types.js';
 import { sendPushToUser, vapidPublicKey } from './push.js';
@@ -56,13 +56,24 @@ const publicDir = path.resolve(process.env.PUBLIC_DIR ?? './public');
 app.get('/health', (_req,res)=>res.json({ok:true,version:APP_VERSION}));
 
 const windowsClientFile = path.join(config.dataDir,'downloads','HomeChat-Windows-Setup.exe');
-app.get('/downloads/HomeChat-Windows-Setup.exe', (_req,res)=>{
-  if(!fs.existsSync(windowsClientFile)) return res.status(404).type('text/plain').send('HomeChat Windows installer is not available yet.');
-  res.type('application/vnd.microsoft.portable-executable');
-  res.setHeader('Content-Disposition','attachment; filename="HomeChat-Windows-Setup.exe"');
-  res.setHeader('Cache-Control','no-store');
-  res.sendFile(windowsClientFile);
-});
+const windowsClientFallbackUrl = String(process.env.HOMECHAT_WINDOWS_CLIENT_URL ?? 'https://github.com/davidkeeton/homechat/releases/download/windows-client-latest/HomeChat-Windows-Setup.exe').trim();
+
+function sendWindowsClient(_req:express.Request,res:express.Response): void {
+  if(fs.existsSync(windowsClientFile)){
+    res.type('application/vnd.microsoft.portable-executable');
+    res.setHeader('Content-Disposition','attachment; filename="HomeChat-Windows-Setup.exe"');
+    res.setHeader('Cache-Control','no-store');
+    res.sendFile(windowsClientFile);
+    return;
+  }
+  if(windowsClientFallbackUrl){
+    res.redirect(302,windowsClientFallbackUrl);
+    return;
+  }
+  res.status(404).type('text/plain').send('HomeChat Windows installer is not available yet.');
+}
+
+app.get('/downloads/HomeChat-Windows-Setup.exe',sendWindowsClient);
 
 app.get('/homechat-root-ca.crt', (_req,res)=>{
   if(!fs.existsSync(config.caCertFile)) return res.status(404).type('text/plain').send('HomeChat CA certificate has not been generated yet.');
@@ -194,12 +205,14 @@ app.get('/api/conversations',requireAuth,(req,res)=>{
   findOrCreateSelf(req.user!.id);
   res.json(conversationSummaries(req.user!.id));
 });
-app.post('/api/conversations/self',requireAuth,(req,res)=>res.status(201).json({id:findOrCreateSelf(req.user!.id)}));
+app.post('/api/conversations/self',requireAuth,(req,res)=>res.status(201).json({id:findOrCreateSelf(req.user!.id,true)}));
 app.post('/api/conversations/direct',requireAuth,(req,res)=>{
   const otherId=Number(req.body?.userId); if (!getUserById(otherId) || otherId===req.user!.id) return res.status(400).json({error:'invalid_user'});
   if(isBlockedPair(req.user!.id,otherId)) return res.status(403).json({error:'blocked'});
   if(!canMessageUser(req.user!.id,otherId)) return res.status(403).json({error:'dm_not_allowed'});
-  const id=findOrCreateDirect(req.user!.id,otherId); res.status(201).json({id});
+  const id=findOrCreateDirect(req.user!.id,otherId);
+  restoreConversationForUser(id,req.user!.id);
+  res.status(201).json({id});
 });
 function pushPreview(message:MessageView):string{
   if(message.deletedAt)return 'Message deleted';
@@ -219,6 +232,17 @@ function queuePushForMessage(message:MessageView):void{
     void sendPushToUser(uid,{title,body:pushPreview(message),conversationId:message.conversationId,messageId:message.id,senderId:message.sender.id},activeDeviceIds(uid)).catch(error=>console.warn('HomeChat push queue failed:',error));
   }
 }
+
+app.delete('/api/conversations/:id',requireAuth,(req,res)=>{
+  const cid=Number(req.params.id);
+  if(!isMember(cid,req.user!.id)) return res.status(403).json({error:'not_a_member'});
+  try{
+    clearConversationForUser(cid,req.user!.id);
+    res.status(204).end();
+  }catch(e:any){
+    res.status(400).json({error:e?.message||'delete_conversation_failed'});
+  }
+});
 
 app.post('/api/conversations/:id/messages',requireAuth,(req,res)=>{
   const cid=Number(req.params.id);
@@ -263,11 +287,11 @@ app.delete('/api/conversations/:id/members/:userId',requireAuth,(req,res)=>{
 app.get('/api/conversations/:id/messages',requireAuth,(req,res)=>{
   const cid=Number(req.params.id); if (!isMember(cid,req.user!.id)) return res.status(403).json({error:'not_a_member'});
   const before=req.query.before?Number(req.query.before):null; const limit=Math.min(100,Math.max(1,Number(req.query.limit??50)));
-  res.json(history(cid,before,limit));
+  res.json(history(cid,req.user!.id,before,limit));
 });
 app.get('/api/conversations/:id/inventory',requireAuth,(req,res)=>{
   const cid=Number(req.params.id); if (!isMember(cid,req.user!.id)) return res.status(403).json({error:'not_a_member'});
-  res.json(conversationInventory(cid));
+  res.json(conversationInventory(cid,req.user!.id));
 });
 
 const storage=multer.diskStorage({
@@ -498,11 +522,12 @@ bootstrap.get('/homechat-root-ca.crt',(_req,res)=>{
   res.setHeader('Content-Disposition','attachment; filename="homechat-root-ca.crt"');
   res.sendFile(config.caCertFile);
 });
+bootstrap.get('/downloads/HomeChat-Windows-Setup.exe',sendWindowsClient);
 bootstrap.get('/',(req,res)=>{
   const host=htmlEscape(req.hostname || config.publicHost);
   const secureUrl=`https://${host}:${config.publicHttpsPort}/`;
   const ready=tlsReady&&fs.existsSync(config.caCertFile);
-  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>HomeChat secure setup</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08090e;color:#f4f5fb;font-family:system-ui,-apple-system,sans-serif}.card{width:min(430px,90vw);padding:28px;border:1px solid #303444;border-radius:20px;background:#12141d;box-shadow:0 30px 90px #0008}h1{margin:0 0 8px}p{color:#aeb4c6;line-height:1.5}.button{display:block;text-align:center;text-decoration:none;margin-top:14px;padding:13px 16px;border-radius:12px;background:#6d5dfc;color:white;font-weight:700}.secondary{background:#242837}.disabled{opacity:.45;pointer-events:none}.note{font-size:13px}</style></head><body><main class="card"><h1>HomeChat secure setup</h1><p>Install the HomeChat root certificate on this device, trust it as a root CA, then continue to the secure app.</p><a class="button${fs.existsSync(config.caCertFile)?'':' disabled'}" href="/homechat-root-ca.crt">Install certificate</a><a class="button secondary${fs.existsSync(windowsClientFile)?'':' disabled'}" href="/downloads/HomeChat-Windows-Setup.exe">Download HomeChat for Windows</a><a class="button secondary${tlsReady?'':' disabled'}" href="${secureUrl}">Continue to secure HomeChat</a>${ready?'':'<p class="note">TLS files are not ready yet. Check HOMECHAT_HOST, HOMECHAT_AUTO_TLS, and the container logs.</p>'}<p class="note">Secure HomeChat: ${secureUrl}</p></main></body></html>`);
+  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>HomeChat secure setup</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08090e;color:#f4f5fb;font-family:system-ui,-apple-system,sans-serif}.card{width:min(430px,90vw);padding:28px;border:1px solid #303444;border-radius:20px;background:#12141d;box-shadow:0 30px 90px #0008}h1{margin:0 0 8px}p{color:#aeb4c6;line-height:1.5}.button{display:block;text-align:center;text-decoration:none;margin-top:14px;padding:13px 16px;border-radius:12px;background:#6d5dfc;color:white;font-weight:700}.secondary{background:#242837}.disabled{opacity:.45;pointer-events:none}.note{font-size:13px}</style></head><body><main class="card"><h1>HomeChat secure setup</h1><p>Install the HomeChat root certificate on this device, trust it as a root CA, then continue to the secure app.</p><a class="button${fs.existsSync(config.caCertFile)?'':' disabled'}" href="/homechat-root-ca.crt">Install certificate</a><a class="button secondary${(fs.existsSync(windowsClientFile)||windowsClientFallbackUrl)?'':' disabled'}" href="/downloads/HomeChat-Windows-Setup.exe">Download HomeChat for Windows</a><a class="button secondary${tlsReady?'':' disabled'}" href="${secureUrl}">Continue to secure HomeChat</a>${ready?'':'<p class="note">TLS files are not ready yet. Check HOMECHAT_HOST, HOMECHAT_AUTO_TLS, and the container logs.</p>'}<p class="note">Secure HomeChat: ${secureUrl}</p></main></body></html>`);
 });
 
 const bootstrapServer=http.createServer(bootstrap);

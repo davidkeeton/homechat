@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS conversation_members (
   joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(conversation_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS conversation_user_state (
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cleared_through_message_id INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_user_state_user ON conversation_user_state(user_id);
 CREATE TABLE IF NOT EXISTS files (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_id INTEGER NOT NULL REFERENCES users(id),
@@ -338,7 +347,7 @@ export function findOrCreateDirect(a: number, b: number): number {
 
 // Saved Messages is represented as a direct conversation with exactly one member.
 // This avoids a destructive migration of the existing conversation type CHECK constraint.
-export function findOrCreateSelf(userId: number): number {
+export function findOrCreateSelf(userId: number, restore = false): number {
   const existing = db.prepare(`
     SELECT c.id FROM conversations c
     JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.user_id=?
@@ -347,7 +356,11 @@ export function findOrCreateSelf(userId: number): number {
       AND (SELECT COUNT(*) FROM conversation_members x WHERE x.conversation_id=c.id)=1
     LIMIT 1
   `).get(userId, userId) as any;
-  if (existing) return Number(existing.id);
+  if (existing) {
+    const id=Number(existing.id);
+    if(restore) restoreConversationForUser(id,userId);
+    return id;
+  }
   db.exec('BEGIN');
   try {
     const info = db.prepare(`INSERT INTO conversations(type,name,created_by) VALUES('direct','Saved Messages',?)`).run(userId);
@@ -434,10 +447,11 @@ export function deleteMessage(messageId:number,userId:number): MessageView {
   return messageById(messageId)!;
 }
 
-export function history(conversationId: number, beforeId: number | null, limit = 50): MessageView[] {
+export function history(conversationId: number, userId:number, beforeId: number | null, limit = 50): MessageView[] {
+  const clearedThrough=conversationClearThrough(conversationId,userId);
   const rows = beforeId
-    ? db.prepare('SELECT id FROM messages WHERE conversation_id=? AND id<? ORDER BY id DESC LIMIT ?').all(conversationId,beforeId,limit)
-    : db.prepare('SELECT id FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT ?').all(conversationId,limit);
+    ? db.prepare('SELECT id FROM messages WHERE conversation_id=? AND id>? AND id<? ORDER BY id DESC LIMIT ?').all(conversationId,clearedThrough,beforeId,limit)
+    : db.prepare('SELECT id FROM messages WHERE conversation_id=? AND id>? ORDER BY id DESC LIMIT ?').all(conversationId,clearedThrough,limit);
   return (rows as any[]).reverse().map(r => messageById(Number(r.id))!);
 }
 
@@ -503,6 +517,36 @@ export function getAvatarFile(fileId:number): any | null {
   `).get(url,url,fileId) as any) ?? null;
 }
 
+function conversationClearThrough(conversationId:number,userId:number): number {
+  const row=db.prepare('SELECT cleared_through_message_id FROM conversation_user_state WHERE conversation_id=? AND user_id=?').get(conversationId,userId) as any;
+  return row ? Number(row.cleared_through_message_id) : 0;
+}
+
+export function clearConversationForUser(conversationId:number,userId:number): void {
+  if(!isMember(conversationId,userId)) throw new Error('not_a_member');
+  const row=db.prepare('SELECT COALESCE(MAX(id),0) AS max_id FROM messages WHERE conversation_id=?').get(conversationId) as any;
+  const through=Number(row?.max_id ?? 0);
+  db.prepare(`
+    INSERT INTO conversation_user_state(conversation_id,user_id,cleared_through_message_id,hidden,updated_at)
+    VALUES(?,?,?,1,?)
+    ON CONFLICT(conversation_id,user_id) DO UPDATE SET
+      cleared_through_message_id=excluded.cleared_through_message_id,
+      hidden=1,
+      updated_at=excluded.updated_at
+  `).run(conversationId,userId,through,new Date().toISOString());
+}
+
+export function restoreConversationForUser(conversationId:number,userId:number): void {
+  if(!isMember(conversationId,userId)) throw new Error('not_a_member');
+  db.prepare(`
+    INSERT INTO conversation_user_state(conversation_id,user_id,cleared_through_message_id,hidden,updated_at)
+    VALUES(?,?,0,0,?)
+    ON CONFLICT(conversation_id,user_id) DO UPDATE SET
+      hidden=0,
+      updated_at=excluded.updated_at
+  `).run(conversationId,userId,new Date().toISOString());
+}
+
 function messageMentionsDisplayName(body:string|null|undefined,displayName:string): boolean {
   if(!body||!displayName)return false;
   const escaped=displayName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -520,14 +564,38 @@ export function conversationSummaries(userId:number): ConversationSummary[] {
     ORDER BY last_message_id DESC, c.id DESC
   `).all(userId) as any[];
   const meRow=db.prepare('SELECT display_name FROM users WHERE id=?').get(userId) as any;
-  return rows.map(c => {
+  const summaries: ConversationSummary[] = [];
+  for(const c of rows){
+    const state=db.prepare('SELECT cleared_through_message_id,hidden FROM conversation_user_state WHERE conversation_id=? AND user_id=?').get(c.id,userId) as any;
+    const clearedThrough=state ? Number(state.cleared_through_message_id) : 0;
+    const hidden=Boolean(state?.hidden);
+    const globalLastMessageId=Number(c.last_message_id);
+    if(hidden && globalLastMessageId<=clearedThrough) continue;
+
     const members = (db.prepare(`SELECT u.* FROM users u JOIN conversation_members cm ON cm.user_id=u.id WHERE cm.conversation_id=? ORDER BY u.display_name`).all(c.id) as any[]).map(publicUser);
-    const lm = Number(c.last_message_id) ? {id:Number(c.last_message_id)} : null;
-    const unreadRows = db.prepare(`SELECT m.body FROM message_receipts mr JOIN messages m ON m.id=mr.message_id WHERE mr.user_id=? AND m.conversation_id=? AND mr.read_at IS NULL AND m.sender_id<>?`).all(userId,c.id,userId) as any[];
+    const visibleLastRow=db.prepare('SELECT MAX(id) AS id FROM messages WHERE conversation_id=? AND id>?').get(c.id,clearedThrough) as any;
+    const visibleLastId=visibleLastRow?.id ? Number(visibleLastRow.id) : 0;
+    const unreadRows = db.prepare(`
+      SELECT m.body
+      FROM message_receipts mr
+      JOIN messages m ON m.id=mr.message_id
+      WHERE mr.user_id=? AND m.conversation_id=? AND mr.read_at IS NULL AND m.sender_id<>? AND m.id>?
+    `).all(userId,c.id,userId,clearedThrough) as any[];
     const mentionCount=unreadRows.reduce((n,r)=>n+(messageMentionsDisplayName(r.body,meRow?.display_name||'')?1:0),0);
     const isSelf = c.type === 'direct' && members.length === 1 && members[0]?.id === userId;
-    return { id:Number(c.id), type:c.type, isSelf, name:c.name ?? null, avatarUrl:c.avatar_url ?? null, members, unreadCount:unreadRows.length, mentionCount, lastMessage:lm ? messageById(Number(lm.id)) : null };
-  });
+    summaries.push({
+      id:Number(c.id),
+      type:c.type,
+      isSelf,
+      name:c.name ?? null,
+      avatarUrl:c.avatar_url ?? null,
+      members,
+      unreadCount:unreadRows.length,
+      mentionCount,
+      lastMessage:visibleLastId ? messageById(visibleLastId) : null
+    });
+  }
+  return summaries;
 }
 
 export function conversationType(conversationId:number): string | null {
@@ -564,7 +632,8 @@ function urlsFromText(text: string | null): string[] {
   return [...text.matchAll(URL_RE)].map(m => m[0].replace(/[),.;!?]+$/g,''));
 }
 
-export function conversationInventory(conversationId:number): ConversationInventory {
+export function conversationInventory(conversationId:number,userId:number): ConversationInventory {
+  const clearedThrough=conversationClearThrough(conversationId,userId);
   const rows = db.prepare(`
     SELECT m.id,m.body,m.created_at,m.sender_id,m.file_id,
            u.hid,u.display_name,u.avatar_url,u.is_admin,
@@ -572,9 +641,9 @@ export function conversationInventory(conversationId:number): ConversationInvent
     FROM messages m
     JOIN users u ON u.id=m.sender_id
     LEFT JOIN files f ON f.id=m.file_id
-    WHERE m.conversation_id=? AND m.deleted_at IS NULL
+    WHERE m.conversation_id=? AND m.id>? AND m.deleted_at IS NULL
     ORDER BY m.id DESC
-  `).all(conversationId) as any[];
+  `).all(conversationId,clearedThrough) as any[];
   const media: ConversationInventory['media'] = [];
   const files: ConversationInventory['files'] = [];
   const links: ConversationInventory['links'] = [];
@@ -617,9 +686,13 @@ export function searchMessages(userId:number,q:string,limit=50): MessageSearchRe
   const rows=db.prepare(`
     SELECT m.id FROM messages m
     JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=?
-    WHERE m.deleted_at IS NULL AND m.body IS NOT NULL AND m.body LIKE ? COLLATE NOCASE
+    LEFT JOIN conversation_user_state cus ON cus.conversation_id=m.conversation_id AND cus.user_id=?
+    WHERE m.deleted_at IS NULL
+      AND m.body IS NOT NULL
+      AND m.id>COALESCE(cus.cleared_through_message_id,0)
+      AND m.body LIKE ? COLLATE NOCASE
     ORDER BY m.id DESC LIMIT ?
-  `).all(userId,`%${term}%`,Math.min(100,Math.max(1,limit))) as any[];
+  `).all(userId,userId,`%${term}%`,Math.min(100,Math.max(1,limit))) as any[];
   return rows.map(r=>messageById(Number(r.id))).filter(Boolean).map(message=>({message:message!}));
 }
 
