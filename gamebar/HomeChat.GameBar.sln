@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.31903.59
+# Visual Studio Version 18
+VisualStudioVersion = 18.10.12217.157 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeChat.GameBar", "HomeChat.GameBar\HomeChat.GameBar.csproj", "{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}"
 EndProject
@@ -12,7 +12,11 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}.Debug|x64.ActiveCfg = Debug|x64
 		{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}.Debug|x64.Build.0 = Debug|x64
+		{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}.Debug|x64.Deploy.0 = Debug|x64
 		{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}.Release|x64.ActiveCfg = Release|x64
 		{8D2F9D39-6D64-4E0A-A8DD-1E950A8CF160}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal

@@ -11,7 +11,7 @@
     <AssemblyName>HomeChat.GameBar</AssemblyName>
     <DefaultLanguage>en-US</DefaultLanguage>
     <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
-    <TargetPlatformVersion Condition=" '$(TargetPlatformVersion)' == '' ">10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformVersion Condition=" '$(TargetPlatformVersion)' == '' ">10.0.22621.0</TargetPlatformVersion>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
     <FileAlignment>512</FileAlignment>
@@ -23,8 +23,9 @@
     <GenerateTestArtifacts>True</GenerateTestArtifacts>
     <AppxBundle>Never</AppxBundle>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
+    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <DebugSymbols>true</DebugSymbols>
     <OutputPath>bin\x64\Debug\</OutputPath>
@@ -42,24 +43,32 @@
     <UseVSHostingProcess>false</UseVSHostingProcess>
     <UseDotNetNativeToolchain>true</UseDotNetNativeToolchain>
   </PropertyGroup>
-
   <ItemGroup>
-    <Compile Include="App.xaml.cs"><DependentUpon>App.xaml</DependentUpon></Compile>
+    <Compile Include="App.xaml.cs">
+      <DependentUpon>App.xaml</DependentUpon>
+    </Compile>
     <Compile Include="HomeChatApi.cs" />
-    <Compile Include="HomeChatWidget.xaml.cs"><DependentUpon>HomeChatWidget.xaml</DependentUpon></Compile>
+    <Compile Include="HomeChatWidget.xaml.cs">
+      <DependentUpon>HomeChatWidget.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Models.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
-
   <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest"><SubType>Designer</SubType></AppxManifest>
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
   </ItemGroup>
-
   <ItemGroup>
-    <ApplicationDefinition Include="App.xaml"><Generator>MSBuild:Compile</Generator><SubType>Designer</SubType></ApplicationDefinition>
-    <Page Include="HomeChatWidget.xaml"><Generator>MSBuild:Compile</Generator><SubType>Designer</SubType></Page>
+    <ApplicationDefinition Include="App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </ApplicationDefinition>
+    <Page Include="HomeChatWidget.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
-
   <ItemGroup>
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\Square44x44Logo.png" />
@@ -70,17 +79,20 @@
     <Content Include="Assets\SplashScreen.png" />
     <Content Include="Properties\Default.rd.xml" />
   </ItemGroup>
-
   <ItemGroup>
-    <PackageReference Include="Microsoft.Gaming.XboxGameBar"><Version>7.2.240903001</Version></PackageReference>
-    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform"><Version>6.2.14</Version></PackageReference>
-    <PackageReference Include="Newtonsoft.Json"><Version>13.0.3</Version></PackageReference>
+    <PackageReference Include="Microsoft.Gaming.XboxGameBar">
+      <Version>7.3.2607010</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
+      <Version>6.2.14</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.4</Version>
+    </PackageReference>
   </ItemGroup>
-
   <PropertyGroup>
     <XboxGameBar-Platform Condition="'$(Platform)' == 'x86'">win32</XboxGameBar-Platform>
     <XboxGameBar-Platform Condition="'$(Platform)' != 'x86'">$(Platform)</XboxGameBar-Platform>
   </PropertyGroup>
-
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
 </Project>

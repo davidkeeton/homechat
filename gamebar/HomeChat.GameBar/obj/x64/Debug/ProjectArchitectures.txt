@@ -1,0 +1,1 @@
+C:\Users\David\OneDrive\Documents\GitHub\homechat\gamebar\HomeChat.GameBar\HomeChat.GameBar.csproj;x64

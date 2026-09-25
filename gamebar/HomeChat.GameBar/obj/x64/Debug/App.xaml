@@ -1,0 +1,14 @@
+﻿<Application
+    x:Class="HomeChat.GameBar.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <SolidColorBrush x:Key="HomeChatBackground" Color="#17191D" />
+            <SolidColorBrush x:Key="HomeChatPanel" Color="#22252B" />
+            <SolidColorBrush x:Key="HomeChatAccent" Color="#55C27A" />
+            <SolidColorBrush x:Key="HomeChatMuted" Color="#9AA0A9" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
+
